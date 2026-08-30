@@ -218,13 +218,13 @@ tailscale_validate_bool TAILSCALE_RUN_SSH_SERVER "${TAILSCALE_RUN_SSH_SERVER:-tr
 tailscale_validate_bool TAILSCALE_AUTH_KEY_REQUIRED "${TAILSCALE_AUTH_KEY_REQUIRED:-true}"
 tailscale_interface=${TAILSCALE_INTERFACE:-tailscale0}
 tailscale_validate_iface_name TAILSCALE_INTERFACE "$tailscale_interface"
+tailscale_interface_log_regex=$(printf '%s\n' "$tailscale_interface" | sed 's/[.]/[.]/g')
 
 : "${FILE_TAILSCALED_DEFAULT:?FILE_TAILSCALED_DEFAULT must be set}"
 : "${FILE_TAILSCALE_MANAGED_DEFAULT:?FILE_TAILSCALE_MANAGED_DEFAULT must be set}"
 : "${FILE_TAILSCALE_MANAGED_HELPER:?FILE_TAILSCALE_MANAGED_HELPER must be set}"
 : "${FILE_TAILSCALE_BOOTSTRAP_SERVICE:?FILE_TAILSCALE_BOOTSTRAP_SERVICE must be set}"
 : "${FILE_TAILSCALED_SERVICE_OVERRIDE:?FILE_TAILSCALED_SERVICE_OVERRIDE must be set}"
-: "${FILE_TAILSCALED_CLEANUP_HELPER:?FILE_TAILSCALED_CLEANUP_HELPER must be set}"
 : "${FILE_TAILSCALE_TUN_MODULES_LOAD:?FILE_TAILSCALE_TUN_MODULES_LOAD must be set}"
 : "${FILE_TAILSCALE_AUTH_KEY:?FILE_TAILSCALE_AUTH_KEY must be set}"
 : "${FILE_TAILSCALE_COMPLETE:?FILE_TAILSCALE_COMPLETE must be set}"
@@ -260,7 +260,11 @@ unset auth_key 2>/dev/null || true
 
 {
   write_shell_config_var PORT "${TAILSCALE_UDP_PORT:-41641}"
-  write_shell_config_var FLAGS "--tun=${tailscale_interface}"
+  # This is Tailscale's supported upload opt-out. It intentionally disables
+  # Tailscale technical support and is incompatible with tailnets that require
+  # data-plane audit logging, but it does not replace or disable local journal
+  # diagnostics, control connectivity, DERP, or direct peer transport.
+  write_shell_config_var FLAGS "--tun=${tailscale_interface} --no-logs-no-support"
 } >"${target_root}${FILE_TAILSCALED_DEFAULT}"
 chmod 0644 "${target_root}${FILE_TAILSCALED_DEFAULT}" 2>/dev/null || true
 
@@ -273,14 +277,10 @@ tailscale_stage_target_asset \
   "${FILE_TAILSCALE_BOOTSTRAP_SERVICE}" \
   0644
 tailscale_render_target_asset \
-  "$(installer_repo_join_var DIR_HOOKS_SHARED_TARGET usr/local/libexec/tailscaled-cleanup-if-needed.tmpl)" \
-  "${FILE_TAILSCALED_CLEANUP_HELPER}" \
-  0755 \
-  TAILSCALE_INTERFACE "$tailscale_interface"
-tailscale_stage_target_asset \
-  "$(installer_repo_join_var DIR_HOOKS_SHARED_TARGET etc/systemd/system/tailscaled.service.d/override.conf)" \
+  "$(installer_repo_join_var DIR_HOOKS_SHARED_TARGET etc/systemd/system/tailscaled.service.d/override.conf.tmpl)" \
   "${FILE_TAILSCALED_SERVICE_OVERRIDE}" \
-  0644
+  0644 \
+  TAILSCALE_INTERFACE_REGEX "$tailscale_interface_log_regex"
 tailscale_stage_target_asset \
   "$(installer_repo_join_var DIR_HOOKS_SHARED_TARGET etc/modules-load.d/50-tailscale.conf)" \
   "${FILE_TAILSCALE_TUN_MODULES_LOAD}" \

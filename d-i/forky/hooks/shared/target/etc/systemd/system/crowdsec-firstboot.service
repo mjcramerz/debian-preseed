@@ -13,8 +13,8 @@ Type=oneshot
 Environment=CROWDSEC_ENROLL_ATTEMPTS=6
 Environment=CROWDSEC_ENROLL_RETRY_DELAY_SECONDS=10
 ExecStart=/usr/local/libexec/crowdsec-firstboot
-StandardOutput=journal+console
-StandardError=journal+console
+StandardOutput=journal
+StandardError=journal
 Restart=on-failure
 RestartSec=30s
 TimeoutStartSec=10min

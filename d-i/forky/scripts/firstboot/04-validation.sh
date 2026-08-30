@@ -224,7 +224,6 @@ validate_desktop_role() {
     /etc/greetd/gtkgreet-power.css \
     /etc/polkit-1/rules.d/00-admin-identities.rules \
     /etc/polkit-1/rules.d/03-labwc-power.rules \
-    /etc/polkit-1/rules.d/04-fwupd-refresh.rules \
     /etc/polkit-1/rules.d/05-active-local-gate.rules \
     /etc/polkit-1/rules.d/10-greetd-power.rules \
     /etc/polkit-1/rules.d/10-pkexec.rules \
@@ -639,7 +638,6 @@ validate_desktop_role() {
   polkit_rules_ok=true
   for polkit_rule in \
     00-admin-identities.rules \
-    04-fwupd-refresh.rules \
     05-active-local-gate.rules \
     10-greetd-power.rules \
     10-pkexec.rules \

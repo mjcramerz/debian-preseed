@@ -1,0 +1,31 @@
+# shellcheck shell=sh
+# Managed by unattended-installer.
+#
+# The root-owned Incus daemon manages host namespaces and storage. This account
+# reaches it only through the confined `incus` group, never `incus-admin`.
+# The package-owned incus-user.socket creates and serves the account's
+# restricted per-user project, whose containers cannot be privileged. No
+# remote API listener is required.
+
+incusops() {
+  command -v incus >/dev/null 2>&1 || {
+    printf '%s\n' 'incusops: incus is unavailable' >&2
+    return 127
+  }
+  command incus "$@"
+}
+
+incusui() {
+  case "$#" in
+    0) ;;
+    *)
+      printf '%s\n' 'usage: incusui' >&2
+      return 64
+      ;;
+  esac
+  command -v incus >/dev/null 2>&1 || {
+    printf '%s\n' 'incusui: incus is unavailable' >&2
+    return 127
+  }
+  command incus webui
+}

@@ -361,6 +361,14 @@ local $ENV{PERL5LIB} = join q{:}, $stub_root, $rendered_root, @module_roots;
 local $ENV{LC_ALL} = 'C';
 local $ENV{TZ} = 'UTC';
 
+{
+    local @INC = ($stub_root, $rendered_root, @module_roots, @INC);
+    require Telpoll::Daemon;
+    require Telpoll::State;
+    install_telpoll_test_accessors();
+    test_telpoll_singleton_and_offsets();
+}
+
 for my $path (@module_paths) {
     my ($ok, $diagnostic) = compile_perl($path);
     ok($ok, relative_path($path) . ' compiles')
@@ -520,3 +528,303 @@ sub compile_perl {
     my $status = $?;
     return ($status == 0, $output . $diagnostic);
 }
+
+sub install_telpoll_test_accessors {
+    no strict 'refs';
+    no warnings 'redefine';
+
+    *{'Telpoll::State::directory'} = sub { return $_[0]->{directory}; };
+    *{'Telpoll::State::max_bytes'} = sub {
+        return $_[0]->{max_bytes} // (1024 * 1024);
+    };
+    *{'Telpoll::State::data'} = sub {
+        my ($self) = @_;
+        $self->{data} //= $self->_build_data();
+        return $self->{data};
+    };
+    *{'Telpoll::State::lock_handle'} = sub {
+        my ($self, $handle) = @_;
+        $self->{lock_handle} = $handle if @_ > 1;
+        return $self->{lock_handle};
+    };
+
+    for my $accessor (qw(config logger state telegram processor whisper)) {
+        *{"Telpoll::Daemon::${accessor}"} = sub {
+            return $_[0]->{$accessor};
+        };
+    }
+    *{'Telpoll::Daemon::stop_requested'} = sub {
+        my ($self, $value) = @_;
+        $self->{stop_requested} = $value ? 1 : 0 if @_ > 1;
+        return $self->{stop_requested} // 0;
+    };
+    return;
+}
+
+sub test_telpoll_singleton_and_offsets {
+    my $lock_directory = tempdir(CLEANUP => 1);
+    my $lock_owner = bless {
+        directory => $lock_directory,
+    }, 'Telpoll::State';
+    my $owner_ok = eval {
+        $lock_owner->acquire_lock();
+        1;
+    };
+    ok($owner_ok, 'telpoll first state object acquires the local daemon lock')
+        or diag($@);
+
+    my $lock_contender = bless {
+        directory => $lock_directory,
+    }, 'Telpoll::State';
+    my $contender_ok = eval {
+        $lock_contender->acquire_lock();
+        1;
+    };
+    ok(!$contender_ok, 'telpoll second state object fails the singleton lock nonblockingly');
+    is(
+        $@,
+        "telpoll: another daemon instance is already running\n",
+        'telpoll reports the exact local singleton-owner failure',
+    );
+
+    my $ownership_conflict =
+        "telpoll: Telegram getUpdates failed with HTTP 409: " .
+        "Conflict: terminated by other getUpdates request; " .
+        "make sure that only one bot instance is running\n";
+    my $conflict_state = TelpollTest::State->new(
+        offset  => 17,
+        pending => {
+            17 => {
+                attempts        => 0,
+                delete_attempts => 0,
+                local_complete  => 0,
+                delete_message  => 0,
+            },
+        },
+    );
+    my $conflict_daemon = bless {
+        config => TelpollTest::Config->new(
+            ownership_conflict_backoff_seconds => 900,
+            max_update_attempts                 => 5,
+        ),
+        logger    => TelpollTest::Logger->new(),
+        state     => $conflict_state,
+        telegram  => TelpollTest::Telegram->new(error => $ownership_conflict),
+        processor => TelpollTest::Processor->new(state => $conflict_state),
+        whisper   => TelpollTest::Whisper->new(),
+    }, 'Telpoll::Daemon';
+    my $observed_delay;
+    my $conflict_ok;
+    {
+        no warnings 'redefine';
+        local *Telpoll::Daemon::_sleep_interruptibly = sub {
+            my ($self, $seconds) = @_;
+            $observed_delay = $seconds;
+            $self->stop_requested(1);
+            return;
+        };
+        $conflict_ok = eval {
+            $conflict_daemon->run(0);
+            1;
+        };
+    }
+    ok($conflict_ok, 'telpoll exact Telegram ownership conflict remains retryable')
+        or diag($@);
+    is($observed_delay, 900, 'telpoll exact ownership conflict selects the configured 900-second backoff');
+    is($conflict_state->offset(), 17, 'telpoll ownership conflict leaves the update offset unchanged');
+    is_deeply(
+        $conflict_state->mutation_events(),
+        [],
+        'telpoll ownership conflict neither advances nor removes pending state',
+    );
+    ok(
+        exists($conflict_state->pending()->{17}),
+        'telpoll ownership conflict preserves existing pending state',
+    );
+
+    my $success_state = TelpollTest::State->new(offset => 41);
+    my $success_processor = TelpollTest::Processor->new(state => $success_state);
+    my $success_daemon = bless {
+        config => TelpollTest::Config->new(
+            ownership_conflict_backoff_seconds => 900,
+            max_update_attempts                 => 5,
+        ),
+        logger => TelpollTest::Logger->new(),
+        state  => $success_state,
+        telegram => TelpollTest::Telegram->new(
+            updates => [
+                {
+                    update_id => 41,
+                    message   => { text => 'fixture' },
+                },
+            ],
+        ),
+        processor => $success_processor,
+        whisper   => TelpollTest::Whisper->new(),
+    }, 'Telpoll::Daemon';
+    my $success_ok = eval {
+        $success_daemon->poll_once();
+        1;
+    };
+    ok($success_ok, 'telpoll processes a successful update fixture')
+        or diag($@);
+    is(
+        $success_processor->offset_during_process(),
+        41,
+        'telpoll keeps the old offset while update processing is in progress',
+    );
+    is(
+        $success_processor->advance_calls_during_process(),
+        0,
+        'telpoll does not acknowledge an update before processing completes',
+    );
+    is($success_state->offset(), 42, 'telpoll advances a processed update to update_id plus one');
+    is_deeply(
+        $success_state->mutation_events(),
+        [qw(advance remove_pending)],
+        'telpoll advances before removing the completed pending record',
+    );
+    ok(
+        !exists($success_state->pending()->{41}),
+        'telpoll removes pending state only after successful processing',
+    );
+    return;
+}
+
+package TelpollTest::Config;
+
+sub new {
+    my ($class, %args) = @_;
+    return bless \%args, $class;
+}
+
+sub ownership_conflict_backoff_seconds {
+    return $_[0]->{ownership_conflict_backoff_seconds};
+}
+
+sub max_update_attempts {
+    return $_[0]->{max_update_attempts};
+}
+
+package TelpollTest::Logger;
+
+sub new {
+    my ($class) = @_;
+    return bless { messages => [] }, $class;
+}
+
+sub log {
+    my ($self, @message) = @_;
+    push @{ $self->{messages} }, \@message;
+    return;
+}
+
+package TelpollTest::State;
+
+sub new {
+    my ($class, %args) = @_;
+    $args{pending} //= {};
+    $args{mutation_events} = [];
+    return bless \%args, $class;
+}
+
+sub offset {
+    return $_[0]->{offset};
+}
+
+sub pending {
+    return $_[0]->{pending};
+}
+
+sub mutation_events {
+    return $_[0]->{mutation_events};
+}
+
+sub pending_for {
+    my ($self, $update_id) = @_;
+    $self->{pending}->{$update_id} //= {
+        attempts        => 0,
+        delete_attempts => 0,
+        local_complete  => 0,
+        delete_message  => 0,
+    };
+    return $self->{pending}->{$update_id};
+}
+
+sub save {
+    return;
+}
+
+sub advance {
+    my ($self, $offset) = @_;
+    push @{ $self->{mutation_events} }, 'advance';
+    $self->{offset} = $offset;
+    return;
+}
+
+sub remove_pending {
+    my ($self, $update_id) = @_;
+    push @{ $self->{mutation_events} }, 'remove_pending';
+    delete $self->{pending}->{$update_id};
+    return;
+}
+
+package TelpollTest::Telegram;
+
+sub new {
+    my ($class, %args) = @_;
+    $args{updates} //= [];
+    return bless \%args, $class;
+}
+
+sub get_updates {
+    my ($self) = @_;
+    die $self->{error} if defined($self->{error});
+    return $self->{updates};
+}
+
+sub delete_message {
+    die "telpoll test fixture unexpectedly attempted message deletion\n";
+}
+
+package TelpollTest::Processor;
+
+sub new {
+    my ($class, %args) = @_;
+    return bless \%args, $class;
+}
+
+sub process {
+    my ($self) = @_;
+    my $state = $self->{state};
+    $self->{offset_during_process} = $state->offset();
+    $self->{advance_calls_during_process} = scalar grep {
+        $_ eq 'advance'
+    } @{ $state->mutation_events() };
+    return {
+        delete_message => 0,
+        message_id     => 0,
+        chat_id        => q{},
+    };
+}
+
+sub offset_during_process {
+    return $_[0]->{offset_during_process};
+}
+
+sub advance_calls_during_process {
+    return $_[0]->{advance_calls_during_process};
+}
+
+package TelpollTest::Whisper;
+
+sub new {
+    my ($class) = @_;
+    return bless {}, $class;
+}
+
+sub release_reservation {
+    die "telpoll test fixture unexpectedly released a Whisper reservation\n";
+}
+
+package main;

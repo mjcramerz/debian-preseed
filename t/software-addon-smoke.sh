@@ -3611,7 +3611,6 @@ assert chatgpt_sandbox["ro_bind_paths"] == (
     "/etc/llama",
 )
 assert chatgpt_sandbox["runtime_sockets"] == (
-    "libvirt/libvirt-sock",
     "pipewire-0",
     "pulse/native",
 )
@@ -3718,7 +3717,7 @@ with tempfile.TemporaryDirectory() as private_bind_parent:
     except SystemExit as exc:
         assert exc.code == 1
     else:
-        raise AssertionError("ChatGPT accepted a non-private Vagrant bind directory")
+        raise AssertionError("ChatGPT accepted a non-private bind directory")
 
 with tempfile.TemporaryDirectory() as bind_pair_root:
     bind_pair_source = os.path.join(bind_pair_root, "source")
@@ -4075,8 +4074,8 @@ assert "/data/codex/lib" not in chatgpt_environment["PATH"].split(":")
 assert chatgpt_environment["DEVOPS_PROFILE_ONLY"] == "from-profile"
 assert chatgpt_environment["PYTHONUSERBASE"] == "/profile/python"
 assert chatgpt_environment["SHELL"] == "/bin/zsh"
-assert chatgpt_environment["LIBVIRT_DEFAULT_URI"] == "qemu:///session"
-assert chatgpt_environment["VIRSH_DEFAULT_CONNECT_URI"] == "qemu:///session"
+assert "LIBVIRT_DEFAULT_URI" not in chatgpt_environment
+assert "VIRSH_DEFAULT_CONNECT_URI" not in chatgpt_environment
 assert chatgpt_environment["LD_LIBRARY_PATH"] == "/usr/lib/chatgpt"
 assert chatgpt_environment["WAYLAND_DISPLAY"]
 assert chatgpt_environment["XDG_SESSION_TYPE"] == "wayland"
@@ -5219,8 +5218,8 @@ for mode in ("launch", "intel", "nvidia"):
     assert command_environment["PYTHONUSERBASE"] == "/profile/python"
     assert command_environment["SHELL"] == "/bin/zsh"
     assert command_environment["PATH"] == chatgpt_environment["PATH"]
-    assert command_environment["LIBVIRT_DEFAULT_URI"] == "qemu:///session"
-    assert command_environment["VIRSH_DEFAULT_CONNECT_URI"] == "qemu:///session"
+    assert "LIBVIRT_DEFAULT_URI" not in command_environment
+    assert "VIRSH_DEFAULT_CONNECT_URI" not in command_environment
     assert (
         command_environment["PATH"].index("/opt/profile-only/bin")
         < command_environment["PATH"].index("/usr/local/bin")

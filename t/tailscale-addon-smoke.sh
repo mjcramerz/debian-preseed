@@ -5,7 +5,7 @@ ROOT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/tailscale-addon-smoke.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 
-TEST_COUNT=14
+TEST_COUNT=15
 TEST_INDEX=0
 FAIL_COUNT=0
 
@@ -163,7 +163,7 @@ if grep -q '^umask 077$' "$tailscale_helper" &&
    grep -q 'runtime_env_file=${INSTALLER_RUNTIME_ENV_FILE:-/tmp/install-env/runtime.env}' "$tailscale_helper" &&
    grep -q 'FILE_TAILSCALED_DEFAULT' "$tailscale_helper" &&
    grep -q 'FILE_TAILSCALE_MANAGED_DEFAULT' "$tailscale_helper" &&
-   grep -q 'FILE_TAILSCALED_CLEANUP_HELPER' "$tailscale_helper" &&
+   ! grep -q 'FILE_TAILSCALED_CLEANUP_HELPER' "$tailscale_helper" &&
    grep -q 'FILE_TAILSCALE_TUN_MODULES_LOAD' "$tailscale_helper" &&
    grep -q 'FILE_TAILSCALE_AUTH_KEY' "$tailscale_helper" &&
    grep -q 'FILE_TAILSCALE_COMPLETE' "$tailscale_helper" &&
@@ -176,10 +176,13 @@ if grep -q '^umask 077$' "$tailscale_helper" &&
    ! grep -q 'TAILSCALE_STABLE_SECONDS' "$tailscale_helper" &&
    ! grep -q 'TAILSCALE_RESTART_DAEMON_ON_RETRY' "$tailscale_helper" &&
    grep -q 'write_shell_config_var PORT "${TAILSCALE_UDP_PORT:-41641}"' "$tailscale_helper" &&
-   grep -q 'write_shell_config_var FLAGS "--tun=${tailscale_interface}"' "$tailscale_helper" &&
+   grep -Fq 'write_shell_config_var FLAGS "--tun=${tailscale_interface} --no-logs-no-support"' "$tailscale_helper" &&
    grep -q '^tailscale_validate_iface_name() {$' "$tailscale_helper" &&
    grep -q 'tailscale_validate_iface_name TAILSCALE_INTERFACE "$tailscale_interface"' "$tailscale_helper" &&
-   grep -Fq 'usr/local/libexec/tailscaled-cleanup-if-needed.tmpl' "$tailscale_helper" &&
+   grep -Fq "sed 's/[.]/[.]/g'" "$tailscale_helper" &&
+   grep -Fq 'etc/systemd/system/tailscaled.service.d/override.conf.tmpl' "$tailscale_helper" &&
+   grep -Fq 'TAILSCALE_INTERFACE_REGEX "$tailscale_interface_log_regex"' "$tailscale_helper" &&
+   ! grep -Fq 'tailscaled-cleanup-if-needed' "$tailscale_helper" &&
    grep -q 'tailscale_authkey is required when addon/tailscale is selected for unattended provisioning' "$tailscale_helper" &&
    grep -Fq 'usr/local/libexec/tailscale-managed-up' "$tailscale_helper" &&
    grep -Fq 'usr/local/libexec/managed-syncthing-configure' "$tailscale_helper" &&
@@ -208,6 +211,29 @@ if grep -q '^umask 077$' "$tailscale_helper" &&
   pass "tailscale late helper captures chroot failures correctly and stages the current libexec runtime assets and bounded bootstrap units"
 else
   fail "tailscale late helper captures chroot failures correctly and stages the current libexec runtime assets and bounded bootstrap units" "$tailscale_helper"
+fi
+
+profile_list="$TMP_DIR/host-profiles.list"
+find "$ROOT_DIR/d-i/forky/hosts/profiles" -type f -name '*.env' -print |
+  LC_ALL=C sort >"$profile_list"
+profile_count=0
+profiles_inherit_upload_opt_out=true
+while IFS= read -r profile_path || [ -n "$profile_path" ]; do
+  [ -n "$profile_path" ] || continue
+  profile_count=$((profile_count + 1))
+  if ! grep -Eq '^TAILSCALE_INTERFACE="[A-Za-z0-9_.-]{1,15}"$' "$profile_path" ||
+     grep -Eq '^(TAILSCALED_FLAGS|TAILSCALE_DAEMON_FLAGS|TAILSCALE_FLAGS)=' "$profile_path" ||
+     grep -Fq -- '--no-logs-no-support' "$profile_path"; then
+    profiles_inherit_upload_opt_out=false
+    break
+  fi
+done <"$profile_list"
+if [ "$profile_count" -gt 0 ] &&
+   [ "$profiles_inherit_upload_opt_out" = true ] &&
+   [ "$(grep -Fc 'write_shell_config_var FLAGS "--tun=${tailscale_interface} --no-logs-no-support"' "$tailscale_helper")" -eq 1 ]; then
+  pass "every host profile inherits the shared Tailscale upload opt-out without a profile-local daemon-flags override"
+else
+  fail "every host profile inherits the shared Tailscale upload opt-out without a profile-local daemon-flags override" "$profile_list"
 fi
 
 ssh_helper="$ROOT_DIR/d-i/forky/scripts/common/ssh.sh"
@@ -289,8 +315,7 @@ else
 fi
 
 bootstrap_unit="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/systemd/system/tailscale-managed-bootstrap.service"
-tailscaled_override="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/systemd/system/tailscaled.service.d/override.conf"
-tailscaled_cleanup_template="$ROOT_DIR/d-i/forky/hooks/shared/target/usr/local/libexec/tailscaled-cleanup-if-needed.tmpl"
+tailscaled_override="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/systemd/system/tailscaled.service.d/override.conf.tmpl"
 tailscale_modules_load="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/modules-load.d/50-tailscale.conf"
 syncthing_unit="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/systemd/system/managed-syncthing.service.tmpl"
 if grep -q '^Wants=network-online.target nss-lookup.target time-sync.target tailscaled.service$' "$bootstrap_unit" &&
@@ -306,8 +331,9 @@ if grep -q '^Wants=network-online.target nss-lookup.target time-sync.target tail
    grep -q '^TimeoutStopSec=30s$' "$bootstrap_unit" &&
    grep -Fq '# The wrapper performs an explicit AppArmor transition into usr.bin.tailscale.' "$bootstrap_unit" &&
    grep -q '^NoNewPrivileges=false$' "$bootstrap_unit" &&
-   grep -q '^StandardOutput=journal+console$' "$bootstrap_unit" &&
-   grep -q '^StandardError=journal+console$' "$bootstrap_unit" &&
+   grep -q '^StandardOutput=journal$' "$bootstrap_unit" &&
+   grep -q '^StandardError=journal$' "$bootstrap_unit" &&
+   ! grep -q 'journal+console' "$bootstrap_unit" &&
    grep -q '^PermissionsStartOnly=true$' "$syncthing_unit" &&
    grep -q '^ExecStartPre=/usr/local/libexec/managed-syncthing-configure --prepare$' "$syncthing_unit" &&
    ! grep -q '^ExecStartPre=/bin/sh ' "$syncthing_unit" &&
@@ -321,187 +347,33 @@ if grep -q '^Wants=network-online.target nss-lookup.target time-sync.target tail
    grep -q '^Restart=on-failure$' "$tailscaled_override" &&
    grep -q '^RestartSec=5s$' "$tailscaled_override" &&
    grep -q '^TimeoutStopSec=30s$' "$tailscaled_override" &&
+   grep -Fqx 'LogFilterPatterns=~^router: enumerating __INSTALLER_TAILSCALE_INTERFACE_REGEX__ addresses for cleanup failed: failed to look up link "__INSTALLER_TAILSCALE_INTERFACE_REGEX__": Link not found$' "$tailscaled_override" &&
    grep -Fqx 'LogFilterPatterns=~^ipnext: work queue shutdown failed: execqueue shut down$' "$tailscaled_override" &&
-   grep -Fxq 'ExecStartPre=/usr/local/libexec/tailscaled-cleanup-if-needed' "$tailscaled_override" &&
+   ! grep -q '^ExecStartPre=' "$tailscaled_override" &&
    grep -Fxq 'ExecStopPost=' "$tailscaled_override" &&
    ! grep -Fq 'ExecStopPost=/usr/sbin/tailscaled --cleanup' "$tailscaled_override" &&
-   grep -Fxq "interface_name='__INSTALLER_TAILSCALE_INTERFACE__'" "$tailscaled_cleanup_template" &&
-   grep -Fxq '[ -e "$interface_path" ] || exit 0' "$tailscaled_cleanup_template" &&
-   grep -Fxq 'sleep_bin=${TAILSCALED_SLEEP_BIN:-/usr/bin/sleep}' "$tailscaled_cleanup_template" &&
-   grep -Fxq 'while [ "$cleanup_recheck" -lt 5 ]; do' "$tailscaled_cleanup_template" &&
-   grep -Fxq '  "$sleep_bin" 0.1' "$tailscaled_cleanup_template" &&
-   grep -Fxq '  [ -e "$interface_path" ] || exit 0' "$tailscaled_cleanup_template" &&
-   grep -Fq 'cleanup_output=$("$tailscaled_bin" --cleanup "--tun=${interface_name}" 2>&1)' "$tailscaled_cleanup_template" &&
-   grep -Fq 'failed to look up link \"${interface_name}\": Link not found' "$tailscaled_cleanup_template" &&
-   grep -Fq '[ ! -e "$interface_path" ] && exit 0' "$tailscaled_cleanup_template" &&
+   [ ! -e "$ROOT_DIR/d-i/forky/hooks/shared/target/usr/local/libexec/tailscaled-cleanup-if-needed.tmpl" ] &&
+   ! grep -Eq '^LogFilterPatterns=.*(control:|logtail:|rebind-ping-fail)' "$tailscaled_override" &&
    grep -q '^NoNewPrivileges=true$' "$tailscaled_override" &&
    grep -q '^PrivateTmp=true$' "$tailscaled_override"; then
-  pass "tailscale target units reset duplicate post-stop cleanup without losing newer bootstrap hardening"
+  pass "tailscale target units rely on upstream startup cleanup, suppress only proven no-op diagnostics, and retain bootstrap hardening"
 else
-  fail "tailscale target units reset duplicate post-stop cleanup without losing newer bootstrap hardening" "$bootstrap_unit"
+  fail "tailscale target units rely on upstream startup cleanup, suppress only proven no-op diagnostics, and retain bootstrap hardening" "$bootstrap_unit"
 fi
 
-cleanup_rendered="$TMP_DIR/tailscaled-cleanup-if-needed"
-cleanup_invalid="$TMP_DIR/tailscaled-cleanup-invalid"
-cleanup_sysfs="$TMP_DIR/sys/class/net"
-cleanup_mock="$TMP_DIR/tailscaled"
-cleanup_sleep_mock="$TMP_DIR/sleep"
-cleanup_log="$TMP_DIR/tailscaled-cleanup.log"
-cleanup_sleep_log="$TMP_DIR/tailscaled-sleep.log"
-cleanup_stdout="$TMP_DIR/tailscaled-cleanup.out"
-cleanup_stderr="$TMP_DIR/tailscaled-cleanup.err"
-mkdir -p "$cleanup_sysfs"
-sed 's/__INSTALLER_TAILSCALE_INTERFACE__/tailscale0/g' \
-  "$tailscaled_cleanup_template" >"$cleanup_rendered"
-sed 's|__INSTALLER_TAILSCALE_INTERFACE__|bad/name|g' \
-  "$tailscaled_cleanup_template" >"$cleanup_invalid"
-cat >"$cleanup_mock" <<'EOF'
-#!/bin/sh
-set -eu
-printf '%s\n' "$*" >>"${CLEANUP_LOG:?}"
-case "${CLEANUP_MODE:-success}" in
-  success)
-    exit 0
-    ;;
-  missing-link-race)
-    rm -rf -- "${CLEANUP_INTERFACE_PATH:?}"
-    printf 'router: enumerating tailscale0 addresses for cleanup failed: failed to look up link "tailscale0": Link not found\n' >&2
-    exit 1
-    ;;
-  missing-link-still-present)
-    printf 'router: enumerating tailscale0 addresses for cleanup failed: failed to look up link "tailscale0": Link not found\n' >&2
-    exit 1
-    ;;
-  unrelated-failure)
-    rm -rf -- "${CLEANUP_INTERFACE_PATH:?}"
-    printf '%s\n' 'router: firewall cleanup failed: permission denied' >&2
-    exit 1
-    ;;
-  *)
-    exit 64
-    ;;
-esac
-EOF
-cat >"$cleanup_sleep_mock" <<'EOF'
-#!/bin/sh
-set -eu
-printf '%s\n' "$*" >>"${CLEANUP_SLEEP_LOG:?}"
-sleep_count=$(wc -l <"$CLEANUP_SLEEP_LOG")
-if [ -n "${CLEANUP_SLEEP_REMOVE_AFTER:-}" ] &&
-   [ "$sleep_count" -eq "$CLEANUP_SLEEP_REMOVE_AFTER" ]; then
-  rm -rf -- "${CLEANUP_INTERFACE_PATH:?}"
-fi
-EOF
-chmod 0755 "$cleanup_rendered" "$cleanup_invalid" "$cleanup_mock" "$cleanup_sleep_mock"
-
-cleanup_behavior_ok=true
-TAILSCALED_SYS_CLASS_NET_ROOT="$cleanup_sysfs" \
-TAILSCALED_CLEANUP_BIN="$cleanup_mock" \
-TAILSCALED_SLEEP_BIN="$cleanup_sleep_mock" \
-CLEANUP_LOG="$cleanup_log" \
-CLEANUP_SLEEP_LOG="$cleanup_sleep_log" \
-CLEANUP_INTERFACE_PATH="$cleanup_sysfs/tailscale0" \
-  /bin/sh "$cleanup_rendered" >"$cleanup_stdout" 2>"$cleanup_stderr" ||
-  cleanup_behavior_ok=false
-[ ! -e "$cleanup_log" ] || cleanup_behavior_ok=false
-[ ! -e "$cleanup_sleep_log" ] || cleanup_behavior_ok=false
-[ ! -s "$cleanup_stdout" ] || cleanup_behavior_ok=false
-[ ! -s "$cleanup_stderr" ] || cleanup_behavior_ok=false
-
-mkdir -p "$cleanup_sysfs/tailscale0"
-: >"$cleanup_log"
-: >"$cleanup_sleep_log"
-TAILSCALED_SYS_CLASS_NET_ROOT="$cleanup_sysfs" \
-TAILSCALED_CLEANUP_BIN="$cleanup_mock" \
-TAILSCALED_SLEEP_BIN="$cleanup_sleep_mock" \
-CLEANUP_LOG="$cleanup_log" \
-CLEANUP_SLEEP_LOG="$cleanup_sleep_log" \
-CLEANUP_INTERFACE_PATH="$cleanup_sysfs/tailscale0" \
-  /bin/sh "$cleanup_rendered" >"$cleanup_stdout" 2>"$cleanup_stderr" ||
-  cleanup_behavior_ok=false
-[ "$(cat "$cleanup_log" 2>/dev/null || true)" = '--cleanup --tun=tailscale0' ] ||
-  cleanup_behavior_ok=false
-[ "$(wc -l <"$cleanup_sleep_log")" -eq 5 ] || cleanup_behavior_ok=false
-[ "$(sort -u "$cleanup_sleep_log")" = '0.1' ] || cleanup_behavior_ok=false
-[ ! -s "$cleanup_stderr" ] || cleanup_behavior_ok=false
-
-mkdir -p "$cleanup_sysfs/tailscale0"
-: >"$cleanup_log"
-: >"$cleanup_sleep_log"
-CLEANUP_SLEEP_REMOVE_AFTER=2 \
-TAILSCALED_SYS_CLASS_NET_ROOT="$cleanup_sysfs" \
-TAILSCALED_CLEANUP_BIN="$cleanup_mock" \
-TAILSCALED_SLEEP_BIN="$cleanup_sleep_mock" \
-CLEANUP_LOG="$cleanup_log" \
-CLEANUP_SLEEP_LOG="$cleanup_sleep_log" \
-CLEANUP_INTERFACE_PATH="$cleanup_sysfs/tailscale0" \
-  /bin/sh "$cleanup_rendered" >"$cleanup_stdout" 2>"$cleanup_stderr" ||
-  cleanup_behavior_ok=false
-[ ! -e "$cleanup_sysfs/tailscale0" ] || cleanup_behavior_ok=false
-[ ! -s "$cleanup_log" ] || cleanup_behavior_ok=false
-[ "$(wc -l <"$cleanup_sleep_log")" -eq 2 ] || cleanup_behavior_ok=false
-[ ! -s "$cleanup_stderr" ] || cleanup_behavior_ok=false
-
-mkdir -p "$cleanup_sysfs/tailscale0"
-: >"$cleanup_log"
-: >"$cleanup_sleep_log"
-CLEANUP_MODE=missing-link-race \
-TAILSCALED_SYS_CLASS_NET_ROOT="$cleanup_sysfs" \
-TAILSCALED_CLEANUP_BIN="$cleanup_mock" \
-TAILSCALED_SLEEP_BIN="$cleanup_sleep_mock" \
-CLEANUP_LOG="$cleanup_log" \
-CLEANUP_SLEEP_LOG="$cleanup_sleep_log" \
-CLEANUP_INTERFACE_PATH="$cleanup_sysfs/tailscale0" \
-  /bin/sh "$cleanup_rendered" >"$cleanup_stdout" 2>"$cleanup_stderr" ||
-  cleanup_behavior_ok=false
-[ ! -e "$cleanup_sysfs/tailscale0" ] || cleanup_behavior_ok=false
-[ ! -s "$cleanup_stderr" ] || cleanup_behavior_ok=false
-
-mkdir -p "$cleanup_sysfs/tailscale0"
-if CLEANUP_MODE=missing-link-still-present \
-   TAILSCALED_SYS_CLASS_NET_ROOT="$cleanup_sysfs" \
-   TAILSCALED_CLEANUP_BIN="$cleanup_mock" \
-   TAILSCALED_SLEEP_BIN="$cleanup_sleep_mock" \
-   CLEANUP_LOG="$cleanup_log" \
-   CLEANUP_SLEEP_LOG="$cleanup_sleep_log" \
-   CLEANUP_INTERFACE_PATH="$cleanup_sysfs/tailscale0" \
-     /bin/sh "$cleanup_rendered" >"$cleanup_stdout" 2>"$cleanup_stderr"
-then
-  cleanup_behavior_ok=false
-fi
-grep -Fq 'failed to look up link "tailscale0": Link not found' "$cleanup_stderr" ||
-  cleanup_behavior_ok=false
-
-rm -rf -- "$cleanup_sysfs/tailscale0"
-mkdir -p "$cleanup_sysfs/tailscale0"
-if CLEANUP_MODE=unrelated-failure \
-   TAILSCALED_SYS_CLASS_NET_ROOT="$cleanup_sysfs" \
-   TAILSCALED_CLEANUP_BIN="$cleanup_mock" \
-   TAILSCALED_SLEEP_BIN="$cleanup_sleep_mock" \
-   CLEANUP_LOG="$cleanup_log" \
-   CLEANUP_SLEEP_LOG="$cleanup_sleep_log" \
-   CLEANUP_INTERFACE_PATH="$cleanup_sysfs/tailscale0" \
-     /bin/sh "$cleanup_rendered" >"$cleanup_stdout" 2>"$cleanup_stderr"
-then
-  cleanup_behavior_ok=false
-fi
-grep -Fq 'firewall cleanup failed: permission denied' "$cleanup_stderr" ||
-  cleanup_behavior_ok=false
-
-if TAILSCALED_SYS_CLASS_NET_ROOT="$cleanup_sysfs" \
-   TAILSCALED_CLEANUP_BIN="$cleanup_mock" \
-   TAILSCALED_SLEEP_BIN="$cleanup_sleep_mock" \
-   CLEANUP_LOG="$cleanup_log" \
-   CLEANUP_SLEEP_LOG="$cleanup_sleep_log" \
-   CLEANUP_INTERFACE_PATH="$cleanup_sysfs/tailscale0" \
-     /bin/sh "$cleanup_invalid" >/dev/null 2>&1; then
-  cleanup_behavior_ok=false
-fi
-
-if [ "$cleanup_behavior_ok" = true ]; then
-  pass "tailscaled cleanup accepts only a disappearing-link race and preserves every other failure"
+tailscaled_override_rendered="$TMP_DIR/tailscaled.override.conf"
+tailscale_interface_regex=$(printf '%s\n' 'ts.edge0' | sed 's/[.]/[.]/g')
+sed "s/__INSTALLER_TAILSCALE_INTERFACE_REGEX__/$tailscale_interface_regex/g" \
+  "$tailscaled_override" >"$tailscaled_override_rendered"
+if [ "$tailscale_interface_regex" = 'ts[.]edge0' ] &&
+   [ "$(grep -c '^LogFilterPatterns=' "$tailscaled_override_rendered")" -eq 2 ] &&
+   grep -Fqx 'LogFilterPatterns=~^router: enumerating ts[.]edge0 addresses for cleanup failed: failed to look up link "ts[.]edge0": Link not found$' "$tailscaled_override_rendered" &&
+   grep -Fqx 'LogFilterPatterns=~^ipnext: work queue shutdown failed: execqueue shut down$' "$tailscaled_override_rendered" &&
+   ! grep -q '__INSTALLER_' "$tailscaled_override_rendered" &&
+   ! grep -Eq '^LogFilterPatterns=.*(control:|logtail:|rebind-ping-fail)' "$tailscaled_override_rendered"; then
+  pass "tailscaled log filtering removes only the two proven upstream no-op diagnostics"
 else
-  fail "tailscaled cleanup accepts only a disappearing-link race and preserves every other failure" "$tailscaled_cleanup_template"
+  fail "tailscaled log filtering removes only the two proven upstream no-op diagnostics" "$tailscaled_override_rendered"
 fi
 
 if [ "$TEST_INDEX" -ne "$TEST_COUNT" ]; then

@@ -149,21 +149,18 @@ fwupd_refresh_rule="$ROOT_DIR/d-i/forky/hooks/role/desktop/target/etc/polkit-1/r
 fwupd_refresh_dropin="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/systemd/system/fwupd-refresh.service.d/10-success-exit-status.conf"
 fwupd_daemon_dropin="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/systemd/system/fwupd.service.d/20-managed-upower-ordering.conf"
 storage_script="$ROOT_DIR/d-i/forky/scripts/late/storage-maintenance.sh"
-if grep -q 'action.id === "org.freedesktop.fwupd.refresh-remote"' "$fwupd_refresh_rule" &&
-   grep -q 'var FWUPD_REFRESH_USER = "fwupd-refresh";' "$fwupd_refresh_rule" &&
-   grep -q 'var FWUPD_REFRESH_UNIT = "fwupd-refresh.service";' "$fwupd_refresh_rule" &&
-   grep -q 'subject.user === FWUPD_REFRESH_USER' "$fwupd_refresh_rule" &&
-   grep -q 'subject.system_unit === FWUPD_REFRESH_UNIT' "$fwupd_refresh_rule" &&
-   grep -q 'return polkit.Result.YES;' "$fwupd_refresh_rule" &&
-   sed -n '/^desktop_polkit_managed_rule_files() {$/,/^}$/p' "$desktop_components" |
+if [ ! -e "$fwupd_refresh_rule" ] &&
+   [ ! -e "$fwupd_refresh_dropin" ] &&
+   ! sed -n '/^desktop_polkit_managed_rule_files() {$/,/^}$/p' "$desktop_components" |
      grep -qx '04-fwupd-refresh.rules' &&
-   grep -q '^SuccessExitStatus=2 101$' "$fwupd_refresh_dropin" &&
+   grep -q 'desktop_mask_unit_if_available fwupd-refresh.service system' "$desktop_components" &&
+   grep -q 'desktop_mask_unit_if_available fwupd-refresh.timer system' "$desktop_components" &&
    grep -q '^After=upower.service$' "$fwupd_daemon_dropin" &&
-   grep -q 'etc/systemd/system/fwupd-refresh.service.d/10-success-exit-status.conf|/etc/systemd/system/fwupd-refresh.service.d/10-success-exit-status.conf|0644' "$storage_script" &&
+   ! grep -q 'fwupd-refresh.service.d/10-success-exit-status.conf' "$storage_script" &&
    grep -q 'etc/systemd/system/fwupd.service.d/20-managed-upower-ordering.conf|/etc/systemd/system/fwupd.service.d/20-managed-upower-ordering.conf|0644' "$storage_script"; then
-  pass "fwupd refresh results and daemon-before-UPower shutdown ordering are staged explicitly"
+  pass "automatic fwupd refresh is masked while daemon-before-UPower shutdown ordering remains staged"
 else
-  fail "fwupd refresh results and daemon-before-UPower shutdown ordering are staged explicitly"
+  fail "automatic fwupd refresh is masked while daemon-before-UPower shutdown ordering remains staged"
 fi
 
 account_script="$ROOT_DIR/d-i/forky/scripts/late/account.sh"
@@ -220,19 +217,13 @@ if grep -q '^configure_target_shared_account_access() {$' "$account_script" &&
    grep -q 'target path must be owned by root:root' "$account_script" &&
    grep -q '/usr/bin/sudo must be root-owned with setuid enabled' "$account_script" &&
    grep -q 'etc/udev/udev.conf.d/90-hardening.conf' "$account_script" &&
-   grep -q 'etc/udev/rules.d/99-z-managed-device-removal.rules' "$account_script" &&
-   grep -q '^FILE_UDEV_DEVICE_REMOVAL_RULES="${DIR_UDEV_RULES}/99-z-managed-device-removal.rules"$' "$runtime_env" &&
-   grep -Fqx 'ACTION=="remove", SUBSYSTEM=="sound", KERNEL=="controlC*", ENV{SYSTEMD_WANTS}="", ENV{SYSTEMD_USER_WANTS}=""' "$ROOT_DIR/d-i/forky/hooks/shared/target/etc/udev/rules.d/99-z-managed-device-removal.rules" &&
-   grep -Fqx 'ACTION=="remove", ENV{ID_SMARTCARD_READER}=="?*", ENV{SYSTEMD_WANTS}="", ENV{SYSTEMD_USER_WANTS}=""' "$ROOT_DIR/d-i/forky/hooks/shared/target/etc/udev/rules.d/99-z-managed-device-removal.rules" &&
-   grep -Fqx 'ACTION=="remove", SUBSYSTEM=="misc", KERNEL=="rfkill", ENV{SYSTEMD_WANTS}=""' "$ROOT_DIR/d-i/forky/hooks/shared/target/etc/udev/rules.d/99-z-managed-device-removal.rules" &&
-   grep -Fqx 'ACTION=="remove", SUBSYSTEM=="bluetooth", ENV{SYSTEMD_WANTS}="", ENV{SYSTEMD_USER_WANTS}=""' "$ROOT_DIR/d-i/forky/hooks/shared/target/etc/udev/rules.d/99-z-managed-device-removal.rules" &&
    ! grep -q 'usbmedia\\|usbadmin\\|udisks2\\|polkit-1/rules.d' "$account_script" &&
    grep -q '^configure_target_shared_account_access$' "$ROOT_DIR/d-i/forky/scripts/late/btrfs-family.sh" &&
    grep -q '^configure_target_shared_account_access$' "$ROOT_DIR/d-i/forky/scripts/late/f2fs-family.sh" &&
    grep -q '^  desktop_configure_usb_media_access$' "$ROOT_DIR/d-i/forky/scripts/desktop/labwc.sh"; then
-  pass "shared hooks enforce the declared primary groups plus devops and removal-safe udev activation"
+  pass "shared hooks enforce the declared primary groups plus devops without overriding standard device removal wants"
 else
-  fail "shared hooks enforce the declared primary groups plus devops and removal-safe udev activation"
+  fail "shared hooks enforce the declared primary groups plus devops without overriding standard device removal wants"
 fi
 
 account_answers="$TMP_DIR/account.answers"
@@ -759,6 +750,7 @@ d-i/forky/hosts/profiles/override/f2fs-de-dual.env
 desktop_policy_keys="$TMP_DIR/desktop-policy.keys"
 sed -n '/^# Profile-owned Labwc desktop and desktop-addon policy\.$/,$s/^\([A-Z0-9_][A-Z0-9_]*\)=.*/\1/p' \
   "$ROOT_DIR/d-i/forky/hosts/profiles/btrfs/desktop.env" |
+  grep -vx 'TELPOLL_ENABLED' |
   sort >"$desktop_policy_keys"
 desktop_profiles_ok=true
 for relpath in $desktop_profile_env_files; do
@@ -766,6 +758,7 @@ for relpath in $desktop_profile_env_files; do
   current_policy_keys="$TMP_DIR/$(basename "$relpath").keys"
   sed -n '/^# Profile-owned Labwc desktop and desktop-addon policy\.$/,$s/^\([A-Z0-9_][A-Z0-9_]*\)=.*/\1/p' \
     "$env_file" |
+    grep -vx 'TELPOLL_ENABLED' |
     sort >"$current_policy_keys"
   if ! cmp -s "$desktop_policy_keys" "$current_policy_keys" ||
      ! grep -q '^LABWC_OUTPUT_POLICY="auto"$' "$env_file" ||
@@ -774,10 +767,21 @@ for relpath in $desktop_profile_env_files; do
      ! grep -q '^LABWC_OUTPUT_INTERNAL_PREFERRED_REFRESH_HZ="60"$' "$env_file" ||
      ! grep -q '^LABWC_OUTPUT_EXTERNAL_PREFERRED_REFRESH_HZ="120"$' "$env_file" ||
      ! grep -q '^LABWC_OUTPUT_INTERNAL_SCALE="1"$' "$env_file" ||
-     ! grep -q '^LABWC_OUTPUT_EXTERNAL_SCALE="1"$' "$env_file"; then
+     ! grep -q '^LABWC_OUTPUT_EXTERNAL_SCALE="1"$' "$env_file" ||
+     ! grep -q '^LABWC_ENABLE_KANSHI="false"$' "$env_file" ||
+     ! grep -q '^INCUS_BRIDGE_NAME="incusbr0"$' "$env_file" ||
+     grep -Eq '^(QEMU_LIBVIRT_|QEMU_INCUS_)' "$env_file"; then
     desktop_profiles_ok=false
     break
   fi
+  case "$relpath" in
+    d-i/forky/hosts/profiles/override/btrfs-de-main.env)
+      grep -q '^TELPOLL_ENABLED="true"$' "$env_file" || desktop_profiles_ok=false
+      ;;
+    *)
+      ! grep -q '^TELPOLL_ENABLED=' "$env_file" || desktop_profiles_ok=false
+      ;;
+  esac
 done
 if [ "$desktop_profiles_ok" = true ] &&
    [ "$(wc -l <"$desktop_policy_keys")" -ge 200 ] &&
@@ -786,9 +790,9 @@ if [ "$desktop_profiles_ok" = true ] &&
    grep -q '^LABWC_WAYBAR_FONT_SIZE="11"$' "$ROOT_DIR/d-i/forky/hosts/profiles/override/f2fs-de-cbook.env" &&
    grep -q '^LABWC_CRYSTAL_DOCK_MAXIMUM_ICON_SIZE="60"$' "$ROOT_DIR/d-i/forky/hosts/profiles/override/f2fs-de-cbook.env" &&
    grep -q '^LABWC_GREETER_CLOCK_FONT_SIZE="88"$' "$ROOT_DIR/d-i/forky/hosts/profiles/override/f2fs-de-cbook.env"; then
-  pass "desktop policy is profile-owned with connector-specific modes and compact Chromebook sizing"
+  pass "desktop policy is profile-owned with one output manager, confined Incus, connector-specific modes, and compact Chromebook sizing"
 else
-  fail "desktop policy is profile-owned with connector-specific modes and compact Chromebook sizing"
+  fail "desktop policy is profile-owned with one output manager, confined Incus, connector-specific modes, and compact Chromebook sizing"
 fi
 
 balanced_profile="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/sysctl.d/profiles/balanced/40-balanced.conf"

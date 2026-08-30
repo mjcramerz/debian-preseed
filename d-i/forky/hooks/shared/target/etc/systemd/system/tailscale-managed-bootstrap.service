@@ -32,8 +32,8 @@ ProtectKernelTunables=true
 RestrictSUIDSGID=true
 LockPersonality=true
 SystemCallArchitectures=native
-StandardOutput=journal+console
-StandardError=journal+console
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

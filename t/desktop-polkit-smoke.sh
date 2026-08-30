@@ -9,7 +9,6 @@ FIRSTBOOT="$ROOT_DIR/d-i/forky/scripts/firstboot/04-validation.sh"
 GREETER_RULE="$RULE_DIR/10-greetd-power.rules.tmpl"
 POWER_RULE="$RULE_DIR/03-labwc-power.rules"
 USB_RULE="$RULE_DIR/50-usb-policy.rules"
-FWUPD_RULE="$RULE_DIR/04-fwupd-refresh.rules"
 GATE_RULE="$RULE_DIR/05-active-local-gate.rules"
 
 TEST_COUNT=12
@@ -31,7 +30,6 @@ printf '1..%s\n' "$TEST_COUNT"
 rule_names='
 00-admin-identities.rules
 03-labwc-power.rules
-04-fwupd-refresh.rules
 05-active-local-gate.rules
 10-pkexec.rules
 20-login1-power.rules
@@ -65,13 +63,14 @@ else
   fail "desktop polkit rules require subject.local and do not infer locality from seat strings"
 fi
 
-if grep -Fq 'action.id === "org.freedesktop.fwupd.refresh-remote"' "$FWUPD_RULE" &&
-   grep -Fq 'subject.user === FWUPD_REFRESH_USER' "$FWUPD_RULE" &&
-   grep -Fq 'subject.system_unit === FWUPD_REFRESH_UNIT' "$FWUPD_RULE" &&
-   grep -Fq 'var FWUPD_REFRESH_UNIT = "fwupd-refresh.service";' "$FWUPD_RULE"; then
-  pass "fwupd metadata refresh authorization is limited to its system service"
+if [ ! -e "$RULE_DIR/04-fwupd-refresh.rules" ] &&
+   ! sed -n '/^desktop_polkit_managed_rule_files() {$/,/^}$/p' "$COMPONENTS" |
+     grep -qx '04-fwupd-refresh.rules' &&
+   grep -q 'desktop_mask_unit_if_available fwupd-refresh.service system' "$COMPONENTS" &&
+   grep -q 'desktop_mask_unit_if_available fwupd-refresh.timer system' "$COMPONENTS"; then
+  pass "automatic fwupd refresh is masked without a dedicated authorization rule"
 else
-  fail "fwupd metadata refresh authorization is limited to its system service"
+  fail "automatic fwupd refresh is masked without a dedicated authorization rule"
 fi
 
 gated_prefixes='

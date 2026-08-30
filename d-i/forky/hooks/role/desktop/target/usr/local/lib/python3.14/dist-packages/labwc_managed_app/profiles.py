@@ -502,8 +502,8 @@ CHATGPT_PERSISTENT_PATHS = (
     ".local/share/Codex",
     ".local/state/Codex",
 )
-# Keep virtualization policy inspectable from ChatGPT without exposing the
-# libvirt control socket or writable VM/Vagrant storage to the sandbox.
+# Keep managed host policy inspectable from ChatGPT without exposing
+# privileged service sockets to the sandbox.
 CHATGPT_DEVOPS_READ_ONLY_HOME_DIRECTORIES = (
     ".cmake/packages",
     ".config/Code/User/snippets",
@@ -525,7 +525,6 @@ CHATGPT_DEVOPS_READ_ONLY_HOME_DIRECTORIES = (
     ".config/sleek",
     ".config/task",
     ".config/vim",
-    ".config/virt-manager",
     ".config/yamllint",
     ".local/bin",
     ".local/lib",
@@ -547,8 +546,6 @@ CHATGPT_DEVOPS_READ_ONLY_HOME_FILES = (
     ".config/containers/storage.conf",
     ".config/gh/config.yml",
     ".config/go/env",
-    ".config/libvirt/libvirt.conf",
-    ".config/libvirt/qemu.conf",
     ".config/mimeapps.list",
     ".config/obsidian/obsidian.json",
     ".config/starship.toml",
@@ -568,13 +565,12 @@ CHATGPT_DEVOPS_READ_ONLY_HOME_FILES = (
     ".markdownlint.yml",
     ".profile",
     ".profile.d/71-devops-de.sh",
-    ".profile.d/72-virt-vagrant.sh",
+    ".profile.d/72-incus.sh",
     ".profile.d/75-firmware-workspace.sh",
     ".recoll/recoll.conf",
     ".ripgreprc",
     ".rustfmt.toml",
     ".shellcheckrc",
-    ".vagrant.d/Vagrantfile",
     ".vimrc",
     ".zlogin",
     ".zlogout",
@@ -584,24 +580,13 @@ CHATGPT_DEVOPS_READ_ONLY_HOME_FILES = (
     ".zshrc",
 )
 CHATGPT_VIRTUALIZATION_READ_ONLY_SYSTEM_PATHS = (
-    "/etc/default/virt-host-managed",
+    "/etc/default/incus-host-managed",
     "/etc/incus",
-    "/etc/libvirt",
-    "/etc/lxc",
     "/etc/modprobe.d",
     "/etc/modules-load.d",
     "/etc/qemu",
-    "/etc/systemd/system/libvirtd.service.d",
-    "/etc/systemd/system/virtlockd.service.d",
-    "/etc/systemd/system/virtlogd.service.d",
-    "/etc/systemd/system/virt-host-managed.service",
-    "/etc/systemd/user/managed-libvirt-runtime.service",
-    "/etc/systemd/user/managed-virtlockd.service",
-    "/etc/systemd/user/managed-virtlogd.service",
-    "/etc/systemd/user/libvirt-session.service",
-    "/etc/systemd/user/virt-session-storage.service",
-    "/etc/tmpfiles.d/85-virtualization-storage.conf",
-    "/etc/vagrant",
+    "/etc/systemd/system/incus-host-managed.service",
+    "/etc/tmpfiles.d/85-qemu-incus-storage.conf",
 )
 CHATGPT_DEVOPS_READ_WRITE_HOME_DIRECTORIES = (
     "Downloads",
@@ -648,7 +633,6 @@ PERSISTENT_SANDBOX_CONFIG = {
         "preserve_working_directory": True,
         "runtime_directories": ("doc",),
         "runtime_sockets": (
-            "libvirt/libvirt-sock",
             "pipewire-0",
             "pulse/native",
         ),

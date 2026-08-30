@@ -30,7 +30,6 @@ man_expected="$TMP_DIR/man-db.expected"
 
 cat >"$expected" <<'EOF'
 # Managed by unattended-installer.
-d /var/cache/libvirt 0755 root root -
 d /var/cache/ldconfig 0700 root root -
 d /var/cache/mullvad-vpn 0755 root root -
 d /var/cache/tailscale 0750 root root -
@@ -61,7 +60,6 @@ tmpfiles_sources="$TMP_DIR/tmpfiles.sources"
 find "$ROOT_DIR/d-i/forky/hooks" -path '*/target/etc/tmpfiles.d/*' -type f -print |
   sort >"$tmpfiles_sources"
 cache_paths='
-/var/cache/libvirt
 /var/cache/ldconfig
 /var/cache/mullvad-vpn
 /var/cache/tailscale

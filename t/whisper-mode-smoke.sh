@@ -383,13 +383,23 @@ whisper_toggle_profile=$(
 if assert_contains '#include <abstractions/managed-wrapper-perl>' "$APPARMOR_PROFILE" &&
    assert_contains 'profile managed-whisper-cli-default-model /usr/local/libexec/whisper-cli-default-model flags=(attach_disconnected) {' "$APPARMOR_PROFILE" &&
    printf '%s\n' "$whisper_toggle_profile" |
-     grep -Fqx '  /usr/local/bin/whisper-server rCx -> whisper-server,' &&
+     grep -Fqx '  /usr/local/bin/whisper-server rix,' &&
    printf '%s\n' "$whisper_toggle_profile" |
-     grep -Fqx '  /data/whisper/bin/whisper-server rCx -> whisper-server,' &&
+     grep -Fqx '  /data/whisper/bin/whisper-server rix,' &&
    printf '%s\n' "$whisper_toggle_profile" |
-     grep -Fqx '  /usr/bin/curl rCx -> whisper-http-client,' &&
+     grep -Fqx '  /usr/bin/curl rix,' &&
    printf '%s\n' "$whisper_toggle_profile" |
      grep -Fqx '  /usr/bin/pw-record rCx -> whisper-record,' &&
+   printf '%s\n' "$whisper_toggle_profile" |
+     grep -Fqx '  @{PROC}/devices r,' &&
+   printf '%s\n' "$whisper_toggle_profile" |
+     grep -Fqx '  @{PROC}/sys/vm/mmap_min_addr r,' &&
+   printf '%s\n' "$whisper_toggle_profile" |
+     grep -Fqx '  owner @{PROC}/@{pid}/cmdline r,' &&
+   printf '%s\n' "$whisper_toggle_profile" |
+     grep -Fqx '  network inet stream,' &&
+   ! printf '%s\n' "$whisper_toggle_profile" |
+     grep -Eq '/(usr/local/bin|data/whisper/bin)/whisper-server rCx|/usr/bin/curl rCx' &&
    printf '%s\n' "$whisper_toggle_profile" |
      grep -Fqx '  profile whisper-server flags=(attach_disconnected) {' &&
    printf '%s\n' "$whisper_toggle_profile" |

@@ -12,10 +12,8 @@ Custom Labwc, KWallet, Whisper, notification, and timer units belong there.
 
 Keep administrator-owned user-manager policy under `target/etc/systemd/user/`.
 That includes complete drop-ins for Debian or vendor package units and custom
-units that must remain centrally root-owned rather than copied into a home.
-The managed libvirt session services use this path and apply `ConditionUser=`
-to the installer account; they remain static and are not enabled for every
-login. Do not move them into
+units that must remain centrally root-owned rather than copied into a home. Do
+not move them into
 `target/etc/skel/.config/systemd/user/`, because those files become mutable
 account-owned copies and take precedence over the central policy. Every
 package-unit drop-in must be a complete tracked file; installer code may
@@ -29,9 +27,9 @@ globally. The shared D-Bus user-broker hardening template remains under
 manager.
 
 Keep system services and their administrator drop-ins under
-`target/etc/systemd/system/`. This includes the root-owned virtualization host
-unit, package-owned libvirt service drop-ins, and the Mullvad daemon
-DNS-backend and version-cache lifecycle policy.
+`target/etc/systemd/system/`. This includes the root-owned Incus host
+reconciliation unit, the package-owned restricted user-broker drop-in, and the
+Mullvad daemon DNS-backend and version-cache lifecycle policy.
 
 Do not add a Labwc identity file under `target/etc/environment.d/`. A global
 `environment.d` file applies to the greeter's user manager as well as the
@@ -221,8 +219,8 @@ root-owned directory with mode `0755` but does not pre-create
 data. No account identifier, login, or automatic VPN connection is
 provisioned. The desktop schema override sets
 `org.gnome.system.wsdd` to `display-mode='disabled'`, preventing GVFS from
-broadcasting discovery traffic across Mullvad, libvirt, Incus, LXC, and other
-managed interfaces.
+broadcasting discovery traffic across Mullvad, Incus, and other managed
+interfaces.
 Right-clicking the Bluetooth icon opens quick scan, pair, connect, and
 disconnect actions plus nested device and adapter management. BlueZ starts
 independently and owns controller policy from `/etc/bluetooth/main.conf`; the
@@ -372,7 +370,10 @@ the managed output policy once and retries the client-visible probe under the
 same monotonic ten-second deadline. The helper then coalesces burst DRM events
 before one settled refresh. Output-dependent units such as Foot and the output
 watcher retain their own readiness gates rather than delaying the entire
-session target. `labwc-output-refresh` serializes output changes,
+session target. Every managed desktop profile disables Kanshi, leaving the
+repository-owned watcher and refresher as the sole output-policy owner; the
+tracked Kanshi wrapper exits cleanly when that policy is false.
+`labwc-output-refresh` serializes output changes,
 re-applies the saved DPMS topology, and confirms Labwc has committed its output
 geometry before re-seating session chrome. Foot's vendor service remains
 available for socket activation but is not eagerly linked into
@@ -441,14 +442,15 @@ Hyprpolkit remains available while the request is pending and stops through
 helper has queued the PID-1 worker that begins the bounded session pre-drain.
 The shared Tailscale service drop-in orders `tailscaled.service` after
 `NetworkManager.service` and `network.target`, retaining the physical network
-until its bounded 30-second shutdown completes. Its pre-start cleanup ignores
-only the exact race where `tailscale0` disappears between the guarded sysfs
-check and Tailscale's own enumeration; it confirms the link is absent before
-accepting that result and propagates every other cleanup failure.
-The drop-in filters only Tailscale's deterministic non-fatal
-`ipnext: work queue shutdown failed: execqueue shut down` diagnostic, emitted
-after upstream closes and then waits on the same extension queue; all other
-daemon messages remain visible.
+until its bounded 30-second shutdown completes. Upstream `tailscaled` performs
+best-effort cleanup before every daemon start, so the image adds no duplicate
+pre-start helper and clears the package's redundant post-stop cleanup. The
+drop-in filters only the exact startup no-op for an absent configured TUN link
+and Tailscale's deterministic non-fatal
+`ipnext: work queue shutdown failed: execqueue shut down` diagnostic; real
+router, DERP, and control-plane failures remain visible. The shared daemon
+defaults also pass `--no-logs-no-support` for every profile, retaining local
+journal output while disabling uploads and Tailscale technical support.
 Systemd eagerly starts and directly owns `ksecretd` and `hyprpolkitagent`
 through `labwc-session.target`. The Hyprpolkit drop-in applies bounded
 failure-restart and stop behavior. Autostart waits for those services and the
@@ -622,8 +624,8 @@ desktop profile through `LABWC_TERMINAL_FONT_FAMILY` and
 Each new interactive Bash or Zsh instance in Foot or Kitty sources readable,
 non-symlinked `~/.profile.d/[0-9][0-9]-*.sh` fragments in lexical order. Login
 shells keep the fragments single-loaded, while non-login terminal shells still
-pick up managed addon environment such as development, firmware, and Vagrant
-paths. Zsh keeps its general completion cache but disables persistent
+pick up managed addon helpers such as development, firmware, and Incus
+commands. Zsh keeps its general completion cache but disables persistent
 `DEBS_*` package caches for `apt`, `apt-get`, `apt-cache`, and `apt-mark`, so
 `sudo apt install <TAB>` builds candidates once in memory per shell without
 re-sourcing a malformed `DEBS_avail` file. Nano uses the managed XDG
@@ -632,12 +634,13 @@ configuration at
 defaults plus the standard, Debian-specific, and extra syntax-color bundles
 shipped by the installed `nano` package.
 
-The opt-in `devops` and `virtops` commands each start a nested interactive shell
-in the caller's current terminal and working directory. Their activated
-environments remain confined to that nested shell. `virtops` uses no activation
-marker; `exit` returns to the unchanged caller. The DevOps nested shell is titled
-`[devops]`; managed Zsh `precmd` and `preexec` hooks keep that title visible
-while it is active.
+The opt-in `devops` command starts a nested interactive shell in the caller's
+current terminal and working directory. Its activated environment remains
+confined to that shell, which is titled `[devops]`; managed Zsh `precmd` and
+`preexec` hooks keep that title visible while it is active. The QEMU addon
+instead supplies the direct `incusops` client wrapper and zero-argument
+`incusui` helper; neither starts an activation shell or exports a separate
+virtualization environment.
 
 With `addon/devops`, standalone Codex and the managed ChatGPT/Codex launcher
 source `~/.profile.d/71-devops-de.sh` afresh on every invocation. They validate
@@ -664,69 +667,41 @@ through the mounted DevOps profile and user Bazel configuration; Bazel is not
 modeled as a managed GUI application. Accelerator launches bind available DRM,
 KFD, `/dev/accel`, and selected NVIDIA device nodes while retaining synthetic
 host identity and the DMI, network, storage, and firmware sysfs masks.
-When `addon/qemu` also supplies valid private session directories, the launch
-environment selects legacy libvirtd mode after validating the top-level runtime
-directory as a direct, account-owned private path. `qemu.cfg` explicitly
-selects Debian's `libvirt-daemon`, daemon-common, split driver, log, lock, and
-lockd-plugin packages while rejecting `libvirt-daemon-system`.
-`libvirt-daemon` supplies `/usr/sbin/libvirtd` and the system
-`libvirtd.service`; the driver packages supply the `libvirt_driver_*.so`
-modules loaded by it, and the log and lock packages supply
-`/usr/sbin/virtlogd` and `/usr/sbin/virtlockd`. The late helper fails closed
-unless all explicit packages, those three executables, and every required
-driver module are present.
+`addon/qemu` installs direct QEMU/KVM plus confined Incus. The explicit package
+set contains QEMU x86, OpenGL modules, utilities and block extras, OVMF, swtpm,
+virtiofsd, passt, Incus, its client and Canonical UI payload, uidmap, libosinfo,
+and genisoimage. Libvirt, virt-manager, Vagrant, classic LXC, and standalone
+LXCFS are absent. The late helper verifies the packages, direct QEMU and Incus
+executables, packaged units, UI-aware daemon wrapper, and UI payload before it
+stages the root-owned policy.
 
-The root host unit and package-unit logging drop-ins are installed under
-`/etc/systemd/system/`. The account services are centrally managed under
-`/etc/systemd/user/`, restricted by `ConditionUser=`, and deliberately not
-copied through `/etc/skel/.config/systemd/user/`; account-specific libvirt
-configuration is instead seeded through `/etc/skel/.config/libvirt/`.
-`managed-libvirt-runtime.service`, `managed-virtlogd.service`,
-`managed-virtlockd.service`,
-`libvirt-session.service`, and `virt-session-storage.service` remain static
-without login-time enablement. `managed-libvirt-runtime.service` alone owns
-`$XDG_RUNTIME_DIR/libvirt` through `RuntimeDirectory=libvirt` mode `0700`; the
-log, lock, and session daemons require it, so the directory remains while any
-dependent is active without using `RuntimeDirectoryPreserve=yes`. The
-explicitly started account `libvirtd` exposes only
-`$XDG_RUNTIME_DIR/libvirt/libvirt-sock`; ordinary desktop clients inherit
-`LIBVIRT_AUTOSTART=0`, and the privileged
-`/run/libvirt/libvirt-sock` remains outside the application sandboxes.
-The interactive `virtops` command and the managed
-`/usr/share/applications/virt-manager.desktop` entry both source the same
-account-owned DevOps and virtualization profiles. Each client runs in a
-separate transient user unit that requires the on-demand storage initializer,
-which starts the ordered user units, verifies `qemu:///session`, and initializes
-the rendered `default` pool below
-`/pool/libvirt/session/<account>/images`. `virtops` holds a real libvirt event
-connection for the lifetime of its dedicated terminal shell. Virt-manager is
-bound to `labwc-session.target` with journal-only output, so it stops before the
-compositor and does not inherit the login console. The final client releases
-the initializer; idle `libvirtd` retires after 30 seconds, while a running
-domain keeps the daemon, logger, and lock manager alive. The same pool remains
-the Vagrant provider pool.
-Classic LXC remains on native `/pool/lxc` storage. The managed `lxcfs` stop hook
-uses three normal unmount attempts followed by one validated lazy detach. After
-a successful lazy-detach request, a still-reported `fuse.lxcfs` mount is treated
-as asynchronous reference draining; a failed detach or changed filesystem type
-remains fatal. `lxcfs.service` has a five-second stop ceiling.
-Virt-manager receives the same image path through a compiled GSettings
-override. Daemon records are retained at
-`/var/log/managed/libvirt/daemons.log`. The system and user units use
-journal-only output and never copy messages to a console; rsyslog routes the
-stable `managed-libvirt-runtime`, `virt-session-storage`, `libvirtd`,
-`virtlogd`, `virtlockd`, and `virt-host-managed` identifiers and marks those
-records as handled before generic facility or emergency-wall rules. The system
-`libvirtd` drop-in also requires `virtlockd.socket` and orders after
-`virtlockd.service`; system `virtlogd` rotates at 2 MiB before Debian's package
-fallback threshold. Logrotate checks `daemons.log` daily, retains four
-rotations for at most seven days, and rotates it at 16 MiB. The user
-`virtlogd` cleaner root is
-`/var/log/managed/libvirt/<account>/cache/libvirt/qemu`, directly above the
-account-private `qemu/log` directory it must age and rotate.
-`virt-host-managed` stops only the repository-owned `virtops` libvirt network.
-It never inspects or signals Incus `dnsmasq` PIDs; Incus remains responsible
-for its managed bridge, firewall state, and network-child teardown.
+The rendered tmpfiles policy creates only `/pool/qemu` and `/pool/incus`.
+Direct QEMU may attach only to the managed Incus bridge from
+`/etc/qemu/bridge.conf`. The qemu nftables overlay admits guest DHCP, DNS,
+forwarding, and masquerading only on that bridge; no Incus HTTPS port is
+opened. The account receives `kvm` and restricted `incus` membership, while
+root-equivalent `incus-admin` membership is rejected.
+
+Only `incus.socket` and `incus-user.socket` are enabled. Boot-target links for
+the daemon, package LXCFS companion, startup helper, restricted user broker,
+and repository host unit are removed, so no Incus service process starts at
+boot or login. A first client request reaches `incus-user.socket`; the tracked
+package-unit drop-in requires the static `incus-host-managed.service`, which
+starts the package daemon and shutdown helper and reconciles the host before
+the restricted user broker serves the account.
+
+`incus-host-managed` validates the administrator and restricted Unix sockets,
+creates or verifies the `local` directory pool on `/pool/incus`, reconciles
+`incusbr0`, binds the default profile to that pool and bridge with
+`security.privileged=false`, rejects a configured `core.https_address`, and
+requires the packaged `/ui/` endpoint to answer over the local administrator
+socket. Its AppArmor profile grants only the exact managed files, units,
+sockets, UI payload, `/pool` roots, and Unix-stream access. The account's
+`incusops` and `incusui` functions use the confined client path; the latter
+runs `incus webui` without requiring a persistent network listener. The host
+unit has no custom stop command, leaving orderly instance shutdown to the
+package-owned startup service in reverse dependency order. Codex and ChatGPT
+receive no libvirt/Vagrant environment or runtime-socket injection.
 
 Waybar keeps the existing `LABWC_WAYBAR_*` values as the external/default bar
 dimensions and adds `LABWC_WAYBAR_INTERNAL_*` overrides for the internal-output

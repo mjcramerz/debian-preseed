@@ -571,50 +571,13 @@ nftables_software_selected() {
 }
 
 nftables_qemu_allow_interfaces() {
-  qemu_libvirt_bridge=${QEMU_LIBVIRT_NETWORK_BRIDGE:-virbr0}
-  qemu_incus_bridge=${QEMU_INCUS_BRIDGE_NAME:-incusbr0}
-  qemu_libvirt_bridge=$(nftables_managed_iface_value QEMU_LIBVIRT_NETWORK_BRIDGE "$qemu_libvirt_bridge" virbr0)
-  qemu_incus_bridge=$(nftables_managed_iface_value QEMU_INCUS_BRIDGE_NAME "$qemu_incus_bridge" incusbr0)
-  nftables_merge_unique_tokens "$qemu_libvirt_bridge" "$qemu_incus_bridge"
-}
-
-nftables_qemu_host_allow_interfaces() {
-  qemu_host_interfaces=$(nftables_ssh_allow_interfaces)
-  if nftables_tailscale_selected; then
-    qemu_host_interfaces=$(nftables_merge_unique_tokens "$qemu_host_interfaces" "$(nftables_tailscale_interface)")
-  fi
-  printf '%s\n' "$qemu_host_interfaces"
-}
-
-nftables_qemu_host_allow_ipv4_cidrs() {
-  qemu_host_ipv4=$(nftables_ssh_allow_ipv4_cidrs)
-  if nftables_tailscale_selected; then
-    qemu_host_ipv4=$(nftables_merge_unique_tokens "$qemu_host_ipv4" "$(nftables_tailscale_allow_ipv4_cidrs)")
-  fi
-  printf '%s\n' "$qemu_host_ipv4"
-}
-
-nftables_qemu_host_allow_ipv6_cidrs() {
-  qemu_host_ipv6=$(nftables_ssh_allow_ipv6_cidrs)
-  if nftables_tailscale_selected; then
-    qemu_host_ipv6=$(nftables_merge_unique_tokens "$qemu_host_ipv6" "$(nftables_tailscale_allow_ipv6_cidrs)")
-  fi
-  printf '%s\n' "$qemu_host_ipv6"
+  incus_bridge=${INCUS_BRIDGE_NAME:-incusbr0}
+  nftables_managed_iface_value INCUS_BRIDGE_NAME "$incus_bridge" incusbr0
 }
 
 nftables_qemu_service_placeholder_map() {
   qemu_allow_interfaces=$(nftables_qemu_allow_interfaces)
-  qemu_host_allow_interfaces=$(nftables_qemu_host_allow_interfaces)
-  qemu_host_allow_ipv4=$(nftables_qemu_host_allow_ipv4_cidrs)
-  qemu_host_allow_ipv6=$(nftables_qemu_host_allow_ipv6_cidrs)
-  qemu_incus_https_port=${QEMU_INCUS_HTTPS_PORT:-8443}
-
-  nftables_validate_port_value QEMU_INCUS_HTTPS_PORT "$qemu_incus_https_port"
   printf 'NFTABLES_QEMU_ALLOW_INTERFACES=%s\n' "$(nftables_yaml_inline_list $qemu_allow_interfaces)"
-  printf 'NFTABLES_QEMU_HOST_ALLOW_INTERFACES=%s\n' "$(nftables_yaml_inline_list $qemu_host_allow_interfaces)"
-  printf 'NFTABLES_QEMU_HOST_ALLOW_IPV4=%s\n' "$(nftables_yaml_inline_list $qemu_host_allow_ipv4)"
-  printf 'NFTABLES_QEMU_HOST_ALLOW_IPV6=%s\n' "$(nftables_yaml_inline_list $qemu_host_allow_ipv6)"
-  printf 'QEMU_INCUS_HTTPS_PORT=%s\n' "$qemu_incus_https_port"
 }
 
 nftables_tailscale_interface() {

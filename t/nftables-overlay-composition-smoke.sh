@@ -53,11 +53,7 @@ replacements = {
     "__INSTALLER_NFTABLES_SYNCTHING_ALLOW_IPV4__": '["100.64.0.0/10"]',
     "__INSTALLER_NFTABLES_SYNCTHING_ALLOW_IPV6__": '["fd7a:115c:a1e0::/48"]',
     "__INSTALLER_NFTABLES_SYNCTHING_ALLOW_INTERFACES__": '["tailscale0"]',
-    "__INSTALLER_NFTABLES_QEMU_ALLOW_INTERFACES__": '["virbr0", "incusbr0"]',
-    "__INSTALLER_NFTABLES_QEMU_HOST_ALLOW_INTERFACES__": '["eth0", "en*", "managed-eth0", "wlan0", "wl*", "managed-wifi0", "wg0", "tailscale0"]',
-    "__INSTALLER_NFTABLES_QEMU_HOST_ALLOW_IPV4__": '["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "10.8.0.0/24", "100.64.0.0/10"]',
-    "__INSTALLER_NFTABLES_QEMU_HOST_ALLOW_IPV6__": '["fc00::/7", "fe80::/10", "fd00:8::/64", "fd7a:115c:a1e0::/48"]',
-    "__INSTALLER_QEMU_INCUS_HTTPS_PORT__": "8443",
+    "__INSTALLER_NFTABLES_QEMU_ALLOW_INTERFACES__": '["incusbr0"]',
     "__INSTALLER_SSH_PORT__": "45000",
     "__INSTALLER_NFTABLES_SSH_ALLOW_IPV4__": '["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "10.8.0.0/24"]',
     "__INSTALLER_NFTABLES_SSH_ALLOW_IPV6__": '["fc00::/7", "fe80::/10", "fd00:8::/64"]',
@@ -123,13 +119,13 @@ if run_overlay_case \
   grep -q 'tcp dport { 80, 443 }' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
   grep -q 'udp dport 3478' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
   grep -q 'udp sport 41641' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
-  grep -q 'service qemu_incus_api_ui inbound' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
-  grep -q 'tcp dport 8443' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
+  ! grep -q 'qemu_incus_api_ui' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
+  ! grep -q 'tcp dport 8443' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
   grep -q 'service qbittorrent_incoming inbound' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
   grep -q 'tcp dport 50309' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
   grep -q 'udp dport 50309' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
   grep -q 'service syncthing_sync_tcp inbound' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
-  grep -q 'iifname { "virbr0", "incusbr0" }' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
+  grep -q 'iifname "incusbr0"' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft" &&
   grep -q 'iifname "tailscale0"' "$TMP_DIR/qemu_tailscale_syncthing/root/etc/nftables.d/20-filter.nft"; then
   pass "generator composes qemu, qBittorrent, tailscale, and syncthing overlays without rule conflicts"
 else
@@ -170,11 +166,11 @@ if run_overlay_case \
   "$TAILSCALE_OVERLAY_SRC" \
   "$SYNCTHING_OVERLAY_SRC" \
   "$SSH_OVERLAY_SRC" &&
-  grep -q 'service qemu_incus_api_ui inbound' "$TMP_DIR/qemu_tailscale_syncthing_ssh/root/etc/nftables.d/20-filter.nft" &&
-  grep -q 'tcp dport 8443' "$TMP_DIR/qemu_tailscale_syncthing_ssh/root/etc/nftables.d/20-filter.nft" &&
+  ! grep -q 'qemu_incus_api_ui' "$TMP_DIR/qemu_tailscale_syncthing_ssh/root/etc/nftables.d/20-filter.nft" &&
+  ! grep -q 'tcp dport 8443' "$TMP_DIR/qemu_tailscale_syncthing_ssh/root/etc/nftables.d/20-filter.nft" &&
   grep -q 'tcp dport 45000' "$TMP_DIR/qemu_tailscale_syncthing_ssh/root/etc/nftables.d/20-filter.nft" &&
   grep -q 'iifname "tailscale0"' "$TMP_DIR/qemu_tailscale_syncthing_ssh/root/etc/nftables.d/20-filter.nft" &&
-  grep -q 'iifname { "virbr0", "incusbr0" }' "$TMP_DIR/qemu_tailscale_syncthing_ssh/root/etc/nftables.d/20-filter.nft"; then
+  grep -q 'iifname "incusbr0"' "$TMP_DIR/qemu_tailscale_syncthing_ssh/root/etc/nftables.d/20-filter.nft"; then
   pass "generator composes qemu, tailscale, syncthing, and ssh overlays without conflicts"
 else
   fail "generator composes qemu, tailscale, syncthing, and ssh overlays without conflicts"

@@ -182,8 +182,8 @@ tmpfiles policy creates the root-owned directory with mode `0755` and
 Mullvad remains responsible for replacing the file with valid cache data. The
 installer stores no Mullvad account identifier, performs no login, and does not
 request an automatic VPN connection. The desktop GLib policy also disables
-unsolicited GVFS WSDD discovery so it does not probe VPN, libvirt, Incus, LXC,
-or other managed interfaces.
+unsolicited GVFS WSDD discovery so it does not probe VPN, Incus, or other
+managed interfaces.
 
 AppArmor is enabled globally in enforce mode, while application profiles are
 assigned per-profile modes by `/etc/apparmor/managed-modes.conf`. Every desktop
@@ -360,8 +360,8 @@ desktop profile through `LABWC_TERMINAL_FONT_FAMILY` and
 Each new interactive Bash or Zsh instance in Foot or Kitty sources readable,
 non-symlinked `~/.profile.d/[0-9][0-9]-*.sh` fragments in lexical order. Login
 shells keep the fragments single-loaded, while non-login terminal shells still
-pick up managed addon environment such as development, firmware, and Vagrant
-paths. Zsh keeps its general completion cache but disables persistent
+pick up managed addon helpers such as development, firmware, and Incus
+commands. Zsh keeps its general completion cache but disables persistent
 `DEBS_*` package caches for `apt`, `apt-get`, `apt-cache`, and `apt-mark`, so
 `sudo apt install <TAB>` builds candidates once in memory per shell without
 re-sourcing a malformed `DEBS_avail` file. Nano uses the managed XDG
@@ -642,7 +642,14 @@ failed agent processes with a bounded start-rate policy, and has a ten-second
 stop ceiling. An explicit target stop therefore does not restart it after the
 compositor begins teardown. `telpoll.service` receives the same target
 stop, interrupts a blocking poll on `SIGTERM`, terminates its complete control
-group, and retains a five-second stop deadline. The health notifier installs
+group, and retains a five-second stop deadline. Only `btrfs-de-main` enables
+the poller, and its per-user nonblocking lock prevents a second local daemon
+from sharing that account state. Telegram's `getUpdates` lease is global to
+the bot token, however: that token must not be used by any other host, service,
+or manual poller. A Telegram HTTP 409 naming another `getUpdates` request is
+therefore an external ownership conflict, not an offset or retry failure; stop
+the other poller or provision a distinct bot token before restarting Telpoll.
+The health notifier installs
 its cancellation trap before display preflight and its ten-second coalescing
 delay; no separate `ExecCondition` control process can be killed into a failed
 state during logout. The package-owned polkit helper keeps upstream exit status
@@ -1160,17 +1167,17 @@ classes=lab,server,standard,dhcp,tailscale primary_user=<user> primary_password=
 When enabled, `d-i/forky/classes/class-addon/tailscale.cfg` adds
 `tailscale` and `syncthing`, stages the official Tailscale stable archives from
 `https://pkgs.tailscale.com/stable/debian` for `trixie`, `forky`, and `sid`,
-and pins the `tailscale` package to the official upstream `forky` suite while
-blocking the `trixie` and `sid` variants. The late helper stages:
+and pins the `tailscale` package to the official upstream `trixie` suite while
+blocking the `forky` and `sid` variants. The late helper stages:
 
-- `/etc/default/tailscaled` with the managed TUN interface and direct-connect
-  UDP port
+- `/etc/default/tailscaled` with the managed TUN interface, direct-connect
+  UDP port, and Tailscale's supported `--no-logs-no-support` upload opt-out
 - `/etc/default/tailscale-managed` plus
-  `/usr/local/sbin/tailscale-managed-up`
+  `/usr/local/libexec/tailscale-managed-up`
 - `tailscale-managed-bootstrap.service`
 - a hardened `tailscaled.service` drop-in
 - `/etc/default/managed-syncthing`
-- `/usr/local/sbin/managed-syncthing-configure`
+- `/usr/local/libexec/managed-syncthing-configure`
 - `managed-syncthing.service`
 
 The staged systemd units and drop-ins are installed as world-readable
@@ -1179,11 +1186,18 @@ unit metadata through its APIs regardless of filesystem mode. The staged
 Tailscale auth key remains `0600` and is truncated and removed after a
 successful join or when the node is already enrolled.
 
+Every profile selecting the Tailscale addon receives
+`--no-logs-no-support`. Tailscale continues writing local journal diagnostics,
+but does not create or upload logtail data. Upstream explicitly states that
+this disables Tailscale technical support, and a tailnet that requires
+data-plane audit logging will refuse to keep such a node running; that policy
+must not be enabled on this image without removing the upload opt-out.
+
 The managed Tailscale bootstrap configures `tailscaled` to use the same TUN
-interface and UDP port exposed by the nftables overlay, then uses
-`tailscale up --reset` with `--accept-dns=false`, `--accept-routes=false`,
-`--ssh=true`, and `--netfilter-mode=off` by default, but the managed defaults
-file can now also stage profile-owned `TAILSCALE_*` policy for:
+interface and UDP port exposed by the nftables overlay, then issues one bounded
+`tailscale up` with `--accept-dns=false`, `--accept-routes=false`,
+`--ssh=true`, and `--netfilter-mode=off` by default. The managed defaults
+file also stages profile-owned `TAILSCALE_*` policy for:
 
 - `TAILSCALE_ADVERTISE_TAGS` for tailnet ACL/tag identity
 - `TAILSCALE_ADVERTISE_ROUTES` and `TAILSCALE_ADVERTISE_EXIT_NODE` for subnet
@@ -1204,24 +1218,23 @@ transport cannot pin every reconnect to that same path. TCP `80` and `443`
 remain permitted by the nftables egress overlay. The daemon is also ordered
 after `NetworkManager.service` and `network.target`, which reverses at shutdown
 and keeps the physical network available while Tailscale drains its bounded
-30-second stop path. Startup cleanup accepts only the verified race where
-`tailscale0` disappears after the initial existence check and the daemon
-reports that exact missing-link condition; unrelated cleanup failures, or a
-missing-link message while the interface still exists, remain fatal.
+30-second stop path. Upstream `tailscaled` already performs best-effort DNS and
+router cleanup before every daemon start, so the image does not run a duplicate
+pre-start cleanup helper and clears the package's redundant post-stop cleanup.
+The drop-in discards only upstream's exact missing-`tailscale0` no-op startup
+diagnostic and the exact non-fatal closed extension-queue shutdown diagnostic.
+Control-plane, DERP, router, and all other daemon failures remain visible.
 
 The concrete host profiles require `tailscale_authkey=` whenever the
 `tailscale` addon is selected, so an unattended install fails during late
 configuration instead of booting a node whose Tailscale backend remains
-stopped. The first-boot bootstrap service joins the tailnet once, deletes the
-staged auth key afterwards, and requires a stable `Running` state with a
-Tailscale address for ten seconds. If `tailscale up` reaches its own deadline,
-the helper waits for the daemon to finish any in-progress join before issuing
-another command. Bounded retries preserve the running daemon by default so
-Tailscale retains its recent control-dial health state and can move a failed
-port `80` Noise connection onto HTTPS/TCP `443`. Set
-`TAILSCALE_RESTART_DAEMON_ON_RETRY=true` only as an explicit recovery override
-for a daemon that is demonstrably wedged rather than reconnecting. Final
-bootstrap failures append bounded `tailscale status --json` and
+stopped. The first-boot bootstrap service waits a bounded period for the local
+daemon socket, joins the tailnet once, deletes the staged auth key after a
+confirmed `Running` state with a Tailscale address, and leaves subsequent
+15-minute retry spacing to systemd without recycling `tailscaled`. This
+preserves the daemon's control-dial health and port `80` to HTTPS/TCP `443`
+fallback state. Final bootstrap failures append bounded
+`tailscale status --json` and
 `tailscale netcheck` output, the installed client version, and
 `tailscaled.service` journal diagnostics to the managed bootstrap log.
 Operators who intentionally want manual enrollment must explicitly override
@@ -1394,112 +1407,53 @@ The `cuda` addon is opt-in, is restricted to `amd64`, and is rejected unless
 answers compact the selected `apt-setup/local*` slots so they remain
 consecutive regardless of which optional classes are enabled.
 
-To install the desktop virtualization stack, including QEMU/KVM, libvirt,
-Incus, classic LXC, and Vagrant, add the `qemu` addon class:
+To install the desktop virtualization baseline, including direct QEMU/KVM and
+confined Incus with its local Web UI, add the `qemu` addon class:
 
 ```text
 classes=lab,desktop,standard,dhcp,qemu primary_user=<user> primary_password=<user-password> root_password=<root-password> fruux_username=<fruux-user> fruux_password=<fruux-app-password>
 ```
 
-The installer creates the managed storage roots and guest networks, then keeps
-the virtualization ownership boundary split. `qemu.cfg` selects Debian's
-`libvirt-daemon`, daemon-common, nwfilter configuration, explicit network,
-node-device, nwfilter, QEMU, secret, and storage driver packages, the log and
-lock daemon packages, and the lockd plugin; it deliberately does not install
-`libvirt-daemon-system`. `libvirt-daemon` supplies `/usr/sbin/libvirtd` and its
-system service, while the selected driver packages supply the
-`libvirt_driver_*.so` modules loaded by that daemon. `libvirt-daemon-log` and
-`libvirt-daemon-lock` supply `/usr/sbin/virtlogd` and
-`/usr/sbin/virtlockd`. `qemu-system-modules-opengl` supplies QEMU's
-OpenGL/virgl display modules. The late hook verifies every explicit package,
-all three daemon executables, and every required driver module before staging
-policy; it does not mask the package-owned libvirt services or sockets.
+`qemu.cfg` keeps the package contract explicit: QEMU x86, OpenGL modules,
+utilities and block extras, OVMF, swtpm, virtiofsd, passt, Incus, the Incus
+client and Canonical UI payload, uidmap, libosinfo, and genisoimage. It adds the
+Zabbly Incus Stable `trixie` repository because that is the configured suite
+for the managed Incus packages. Libvirt, virt-manager, Vagrant, classic LXC,
+and standalone LXCFS are deliberately absent. The late hook verifies the
+packages, direct QEMU and Incus executables, packaged systemd units, the
+UI-aware Incus wrapper, and `/opt/incus/ui/index.html` before staging policy.
 
-The package-owned system `libvirtd.service` provides the selected drivers
-through `qemu:///system`. The root-owned
-`/etc/systemd/system/virt-host-managed.service` starts after that daemon and
-uses the system URI only to define and reconcile the dedicated `virtops` NAT
-network on `virbr-virtops`; the managed workflow does not create a system
-storage pool or system-owned guests. Its stop path destroys that managed
-libvirt network only when it is active and never reads or signals Incus
-`dnsmasq` PIDs; Incus remains the sole owner of its bridge, firewall state, and
-network child processes. Administrator-owned drop-ins under
-`/etc/systemd/system/{libvirtd,virtlogd,virtlockd}.service.d/` force
-journal-only standard output and error with stable identifiers. The `libvirtd`
-drop-in also requires `virtlockd.socket` and adds the correct ordering after
-`virtlockd.service`, so the QEMU lock-manager contract fails closed. System
-`virtlogd` rotates at 2 MiB before Debian's package fallback threshold.
+Persistent storage is limited to `/pool/qemu` and `/pool/incus`. The former is
+a root-owned, group-`devops` setgid work root; the latter is the root-owned
+source for the managed Incus `dir` pool. Direct QEMU may attach only to the
+profile-owned Incus bridge, normally `incusbr0`. The qemu nftables overlay
+allows DHCP, DNS, forwarding, and masquerading only for that guest bridge. It
+does not publish an Incus HTTPS port, and the managed helper fails if
+`core.https_address` is set.
 
-The centrally managed account services live under `/etc/systemd/user/`:
-`managed-libvirt-runtime.service`, `managed-virtlogd.service`,
-`managed-virtlockd.service`,
-`libvirt-session.service`, and `virt-session-storage.service`. They are
-root-owned policy, restricted to the installer account with `ConditionUser=`,
-and remain static without an `[Install]` section. They intentionally do not
-live under `/etc/skel/.config/systemd/user/`: that skeleton path is for
-account-owned units copied into a new home, whereas `/etc/systemd/user/` is the
-administrator-controlled user-manager load path. Account-specific libvirt
-configuration is separately seeded through `/etc/skel/.config/libvirt/`.
-`managed-libvirt-runtime.service` is the only unit that owns
-`$XDG_RUNTIME_DIR/libvirt` through `RuntimeDirectory=libvirt` mode `0700`.
-The log, lock, and session daemons require that owner, keeping the directory
-alive until the last dependent stops without using
-`RuntimeDirectoryPreserve=yes` in sibling services. The log and lock services
-use `StopWhenUnneeded=yes`; `libvirt-session.service` instead starts
-`libvirtd --timeout 30`, so it can retire only after the final client has
-disconnected and no running domain still needs it.
+The primary account receives only the `kvm` and restricted `incus` groups;
+membership in root-equivalent `incus-admin` is rejected. The installer enables
+only `incus.socket` and `incus-user.socket`. It removes boot-target links for
+the Incus daemon, LXCFS companion, startup helper, restricted user broker, and
+the repository-owned `incus-host-managed.service`, so no Incus service process
+starts at boot or login. The first restricted client connection activates
+`incus-user.service`; its tracked drop-in requires the static managed host
+service, which in turn starts the package daemon and shutdown helper, validates
+both Unix sockets, and reconciles the host before the confined user broker is
+allowed to serve the account.
 
-The `virtops` command and the managed Virtual Machine Manager launcher
-create separate transient user units that require
-`virt-session-storage.service`; that oneshot service uses
-`StopWhenUnneeded=yes` and starts the ordered runtime, log, lock, and
-`libvirtd` chain while at least one client lease exists. The storage
-initializer uses the same `qemu:///session` connection to create or verify the
-account-owned `default` pool at `/pool/libvirt/session/<user>/images`.
-Interactive `virtops` opens its environment in a new Labwc terminal at the
-caller's working directory and holds a real libvirt event connection for the
-lifetime of that terminal shell. The managed Virtual Machine Manager runs as a
-journal-owned transient service with `PartOf=labwc-session.target`, so it stops
-before the compositor session and cannot write GTK diagnostics to the login
-console. Concurrent shells and GUI clients do not tear down each other's
-daemon chain; after the last client exits, a running guest keeps `libvirtd`,
-`virtlogd`, and `virtlockd` alive, while an idle chain retires automatically.
-Legacy libvirtd client mode exposes one account-owned socket at
-`$XDG_RUNTIME_DIR/libvirt/libvirt-sock`; ordinary clients inherit
-`LIBVIRT_AUTOSTART=0`, so they cannot start an unmanaged daemon implicitly.
-
-Vagrant state remains separate at `/pool/vagrant/<user>/home`, and both
-Vagrant URI settings plus `LIBVIRT_DEFAULT_URI` use `qemu:///session`.
-Virt-manager's compiled GSettings default registers only `qemu:///session` and
-points new images at the managed session directory. `managed-libvirt-runtime`,
-`virt-session-storage`, `libvirtd`, `virtlogd`, `virtlockd`, and
-`virt-host-managed` process records are retained in
-`/var/log/managed/libvirt/daemons.log`. Managed virtualization units use
-journal-only standard output and error, never `journal+console`; rsyslog routes
-their explicit identifiers into that file and marks them as handled before the
-generic facility and emergency-wall rules. The logrotate policy checks the
-file daily, retains four rotations for at most seven days, and rotates at
-16 MiB. The user `virtlogd` cleaner root is
-`/var/log/managed/libvirt/<user>/cache/libvirt/qemu`, one level above the
-account-private QEMU logs in `qemu/log`, so bounded size, backup-count, and age
-retention cover the actual guest logs. The account receives `kvm`, `incus`, and
-`incus-admin`, but not the
-`libvirt` group. When DevOps is selected too, Codex and ChatGPT receive only
-the validated account-owned `libvirt-sock` plus the two private
-Vagrant/session-image directories; the privileged system libvirt socket
-remains unavailable. The
-addon does not create application containers; users manage Incus instances
-directly with the standard `incus` client or the installed UI.
-Classic LXC stores container root filesystems under `/pool/lxc` on the native
-filesystem backing `/pool`; the managed bootstrap rejects FUSE-backed storage
-and existing LXC configs that name a FUSE rootfs backend. The `lxcfs` service is
-installed and ordered before host reconciliation only for its standard
-container-aware `/proc` and cgroup views, not as the container storage layer.
-Its stop hook makes three bounded normal unmount attempts and then issues one
-validated lazy detach. After a successful lazy-detach request, a still-visible
-`fuse.lxcfs` mount is accepted while outstanding kernel references drain; a
-failed detach or changed or foreign filesystem type remains fatal. The package
-service stop ceiling is five seconds.
+The root helper creates or verifies the `local` directory pool on
+`/pool/incus`, `incusbr0`, and a default profile bound to both with
+`security.privileged=false`. It also verifies the packaged Web UI over the
+administrator Unix socket and leaves remote API access disabled. The
+account-local `incusops` helper runs the normal client, while `incusui` runs
+`incus webui` through the local connection; neither requires `incus-admin` or a
+network listener. The managed host service has no custom stop command. Reverse
+unit ordering leaves orderly instance shutdown to the package-owned
+`incus-startup.service` before the daemon stops. Codex and ChatGPT receive no
+libvirt/Vagrant environment, directories, or runtime socket injection. The
+addon creates no instances; the account manages its confined per-user Incus
+project on first use.
 
 To install the hardened rootless Podman baseline, add the `podman` addon
 class:

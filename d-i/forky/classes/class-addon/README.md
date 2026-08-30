@@ -301,13 +301,22 @@ tag/route/approval knobs, and the Tailscale-only firewall posture for
 Tailscale SSH and Syncthing endpoints. The profile-owned
 `TAILSCALE_NETFILTER_MODE=off` delegates packet filtering to the managed
 nftables policy: selecting the addon automatically adds the Tailscale transport
-and Syncthing overlays, and both `tailscaled.service` and the bounded bootstrap
-unit require `nftables.service`. The transport overlay permits the configured
+and Syncthing overlays. The bounded bootstrap requires `nftables.service`,
+while the long-running daemon retains its independent network lifecycle. The
+transport overlay permits the configured
 UDP listen port, control-plane HTTP/HTTPS fallback, STUN, and direct UDP
 traffic; Tailscale SSH and Syncthing remain restricted to the managed
-`tailscale0` interface and tailnet address ranges. Successful bootstrap removes
-the staged auth key and queues cleanup, while transient daemon/control-plane
-failures retry on systemd-spaced ceilings rather than a tight loop. The addon
+`tailscale0` interface and tailnet address ranges. The shared daemon defaults
+pass Tailscale's supported `--no-logs-no-support` flag for every profile, so
+local journal diagnostics remain available but logtail uploads and Tailscale
+technical support are disabled. Tailnets that require data-plane audit logging
+are incompatible with that opt-out. Upstream owns best-effort cleanup at daemon
+start; the service drop-in removes duplicate repository pre-cleanup and package
+post-stop cleanup, filters only the exact absent-link no-op and closed
+extension-queue messages, and retains real control-plane diagnostics.
+Successful bootstrap removes the staged auth key and queues cleanup, while
+transient daemon/control-plane failures retry on systemd-spaced ceilings rather
+than a tight loop. The addon
 does not install or configure `openssh-server`; select `classes=...,ssh`
 separately when you explicitly want the conventional OpenSSH daemon alongside
 Tailscale.
@@ -640,13 +649,13 @@ standalone-Codex arrays
 `CHATGPT_DEVOPS_READ_ONLY_HOME_FILES`. Read-only directory trees cover the
 CMake user package registry at `$HOME/.cmake/packages`, VS Code snippets,
 Bazel, Clangd, direnv, FeatherPad, FZF, Git, Micro, Mise, Nano, Neovim, pip,
-PowerShell, RetroArch, Satty, Sleek, Taskwarrior, Vim, virt-manager, Yamllint,
+PowerShell, RetroArch, Satty, Sleek, Taskwarrior, Vim, and Yamllint,
 `$HOME/.local/bin`, `$HOME/.local/lib`, and PowerShell user modules. File-level
 binds cover VS Code settings and keybindings, Cargo's
 `$HOME/.config/cargo/config.toml`, the non-secret Containers configuration
-files, GitHub CLI `config.yml`, Go's `env`, libvirt client files, the Obsidian
-registry, Starship, uv, MIME and XDG terminal/user-directory files, the managed
-Vagrantfile, Recoll configuration, editor/linter configuration, and the safe
+files, GitHub CLI `config.yml`, Go's `env`, the Obsidian registry, Starship, uv,
+MIME and XDG terminal/user-directory files, Recoll configuration,
+editor/linter configuration, and the safe
 Bash and Zsh startup files including `.bash_logout` and `.zlogin`. Missing
 optional paths are skipped.
 
@@ -829,118 +838,54 @@ Node 26 is the default linked runtime. Developers override it per project with
 commands such as `mise use node@22`, `mise use node@24`, or
 `mise use node@26`; LLVM 24 and Bazelisk need no Mise configuration.
 
-`qemu.cfg` installs the desktop virtualization baseline when selected as
-`classes=...,qemu`; its late helper stages the managed `/pool/libvirt`,
-`/pool/incus`, `/pool/lxc`, and `/pool/vagrant` layout, a reconciled
-classic-LXC system config, the `virt-host-managed` post-boot service, a
-session-default libvirt client configuration for the primary desktop account,
-and a managed nftables guest-network overlay for the libvirt and Incus
-bridges. The package contract is Debian's split-driver `libvirtd` stack:
-`libvirt-daemon`, `libvirt-daemon-common`, the explicit network, node-device,
-nwfilter, QEMU, secret, and storage driver packages, `libvirt-daemon-log`,
-`libvirt-daemon-lock`, and `libvirt-daemon-plugin-lockd`.
-`libvirt-daemon-system` is deliberately absent. `libvirt-daemon` supplies
-`/usr/sbin/libvirtd` and the package-owned `libvirtd.service`; the selected
-driver packages supply the `libvirt_driver_*.so` modules loaded by that daemon,
-and the log and lock packages supply `/usr/sbin/virtlogd` and
-`/usr/sbin/virtlockd`. The late helper verifies every selected package, all
-three executables, and the required network, node-device, nwfilter, QEMU,
-secret, and storage driver modules before it stages policy.
+`qemu.cfg` installs the direct QEMU/KVM and confined Incus baseline when
+selected as `classes=...,qemu`. Its package list is explicit: QEMU x86, OpenGL
+modules, utilities and block extras, OVMF, swtpm, virtiofsd, passt, Incus, the
+Incus client and Canonical UI payload, uidmap, libosinfo, and genisoimage. The
+class adds the configured Zabbly Incus Stable `trixie` repository. Libvirt,
+virt-manager, Vagrant, classic LXC, and standalone LXCFS are intentionally not
+installed. The late helper verifies each required package, the direct QEMU and
+Incus executables, the package systemd units, the UI-aware Incus wrapper, and
+`/opt/incus/ui/index.html` before staging any host policy.
 
-The package-owned system `libvirtd.service` provides the selected drivers
-through `qemu:///system`. Root-owned
-`/etc/systemd/system/virt-host-managed.service` starts after it and uses that
-URI to define and reconcile the dedicated `virtops` NAT network on
-`virbr-virtops`; it rejects the package-owned `default`/`virbr0` pair and
-collisions with `lxcbr0`, `incusbr0`, or the managed Tailscale interface. The
-managed workflow does not create a system storage pool or system-owned guests.
-Drop-ins under
-`/etc/systemd/system/{libvirtd,virtlogd,virtlockd}.service.d/` keep the
-package-owned daemons on journal-only output with stable identifiers. The
-`libvirtd` drop-in requires `virtlockd.socket` and orders after
-`virtlockd.service`, while system `virtlogd` rotates at 2 MiB before Debian's
-package fallback threshold.
+The storage contract has only two persistent roots. The rendered tmpfiles
+policy creates `/pool/qemu` as root:devops mode `2770` and `/pool/incus` as
+root:root mode `0711`. `/etc/qemu/bridge.conf` permits direct QEMU attachment
+only to the profile-owned `INCUS_BRIDGE_NAME`, normally `incusbr0`. The qemu
+nftables overlay admits guest DHCP and DNS plus forwarding and masquerading on
+that bridge only. It contains no host HTTPS port and no second virtualization
+bridge.
 
-The account services are the static, non-enabled
-`managed-libvirt-runtime.service`, `managed-virtlogd.service`,
-`managed-virtlockd.service`,
-`libvirt-session.service`, and `virt-session-storage.service` units under
-`/etc/systemd/user/`. They are root-owned central policy, rendered with
-`ConditionUser=<account>`, and intentionally not copied from
-`/etc/skel/.config/systemd/user/`; that skeleton path is reserved for mutable
-account-owned Labwc units. The administrator-controlled user units have no
-`[Install]` section or login-time enablement link. Account-specific libvirt
-configuration is separately copied from `/etc/skel/.config/libvirt/`. All
-ordinary clients keep `LIBVIRT_AUTOSTART=0`.
-`managed-libvirt-runtime.service` is the sole
-`$XDG_RUNTIME_DIR/libvirt` owner (`RuntimeDirectory=libvirt`, mode `0700`).
-The log, lock, and session daemons require it, so the runtime directory remains
-while any dependent is active and no sibling needs
-`RuntimeDirectoryPreserve=yes`.
+The installer grants the desktop account `kvm` and the restricted `incus`
+group and fails if it belongs to root-equivalent `incus-admin`. It enables only
+`incus.socket` and `incus-user.socket` in `sockets.target.wants`, while removing
+boot-target links for `incus.service`, `incus-lxcfs.service`,
+`incus-startup.service`, `incus-user.service`, and
+`incus-host-managed.service`. Consequently the sockets listen at boot, but no
+Incus service process starts at boot or login.
 
-Entering the dedicated interactive `virtops` shell or opening the managed
-Virtual Machine Manager launcher explicitly starts the persistent user
-runtime owner, `virtlogd`, `virtlockd`, and `libvirtd` chain, followed by
-`virt-session-storage.service`. That oneshot requires
-`libvirt-session.service`, consumes the rendered
-`/etc/libvirt/managed/session-default-pool.xml`, and creates or verifies only
-the session-scoped `default` pool at
-`/pool/libvirt/session/<account>/images` through `qemu:///session`. Legacy
-libvirtd mode exposes one account-owned socket at
-`$XDG_RUNTIME_DIR/libvirt/libvirt-sock`. The private image directory remains
-account-owned mode `0700`.
+The first restricted client request activates `incus-user.service`. Its tracked
+`20-managed-bootstrap.conf` drop-in requires and orders after the static
+`incus-host-managed.service`; that root oneshot requires the package daemon,
+both sockets, and `incus-startup.service`. Before the restricted user broker
+serves the account, `/usr/local/libexec/incus-host-managed` validates package
+socket paths, groups, and modes, creates or verifies the `local` `dir` pool on
+`/pool/incus`, reconciles `incusbr0`, binds the default profile to the managed
+pool and bridge with `security.privileged=false`, and fails if
+`core.https_address` is nonempty. It also requires an HTTP 200 response from
+`/ui/` over the administrator Unix socket. Its AppArmor profile permits only
+the exact managed configuration, unit, tmpfiles, UI, socket, and `/pool` paths
+plus Unix-stream access.
 
-Vagrant stores its own home at `/pool/vagrant/<account>/home`, sets both its
-normal and `system_uri` provider settings to `qemu:///session`, and uses the
-`default` session pool. The account receives only the `kvm`, `incus`, and
-`incus-admin` groups; it is intentionally not added to `libvirt`. The account's
-session-specific `$HOME/.config/libvirt/libvirt.conf` selects
-`remote_mode = "legacy"`, while its `qemu.conf` disables only the unprivileged
-daemon's dynamic sVirt security driver and explicitly uses `virtlogd` plus the
-`virtlockd` plugin. Managed daemon units send standard output and error only to
-journald, never to a console; rsyslog routes the `managed-libvirt-runtime`,
-`virt-session-storage`, `libvirtd`, `virtlogd`, `virtlockd`, and
-`virt-host-managed` identifiers to
-`/var/log/managed/libvirt/daemons.log` and marks those records as handled before
-generic facility or emergency-wall rules. The logrotate policy checks that
-file daily, retains four rotations for at most seven days, and rotates at
-16 MiB.
-Session guest logs live below
-`/var/log/managed/libvirt/<account>/cache/libvirt/qemu/log`; the user
-`virtlogd` cleaner root is the parent `.../cache/libvirt/qemu`, matching its
-one-level traversal and enforcing bounded size, backup-count, and age retention
-on the actual QEMU log directory.
-
-`72-virt-vagrant.sh` validates the account identity, runtime directory,
-session configuration, Vagrant home, and image directory before it exports
-`VAGRANT_DEFAULT_PROVIDER=libvirt` and
-`LIBVIRT_DEFAULT_URI=qemu:///session` into a nested `virtops` shell in the
-caller's current terminal and working directory. `virtops` uses no activation
-marker; exiting the nested shell returns to the caller. Ordinary login shells and the `devops` shell
-keep `LIBVIRT_AUTOSTART=0`, so an unmanaged client cannot create a persistent
-session as a side effect.
-`/usr/local/bin/virt-manager-virtops` validates and sources the same managed
-DevOps and virtualization profiles, starts the same ordered user services,
-verifies `qemu:///session`, and runs `/usr/bin/virt-manager` with an explicit
-session connection. The compiled virt-manager GSettings defaults register and
-autoconnect only `qemu:///session` and set the default image chooser to the
-managed session directory. The managed desktop entry disables D-Bus activation
-so package launcher shortcuts cannot bypass that preparation. Desktop
-application sandboxes receive only the account-owned
-`$XDG_RUNTIME_DIR/libvirt/libvirt-sock`; the privileged
-`/run/libvirt/libvirt-sock` remains unavailable.
-Their sandboxes expose the installed `/usr` and `/opt` toolchains plus
-read-only `/data`, `/pool`, package metadata, and GPU-relevant sysfs. Existing
-Codex, build, cache, database, workspace, and Vagrant-home paths retain their
-explicit writable overlays. DRM, KFD, accelerator, and selected NVIDIA device
-nodes are admitted only when present, while DMI, network, storage, firmware,
-machine-ID, hostname, account, and boot-ID identity surfaces remain masked.
-
-The addon also stages the official Zabbly Incus repository with target pinning
-for `incus-ui-canonical`. Zabbly does not currently publish a `forky` suite
-under `incus/stable/dists/`; the addon therefore uses the published `trixie`
-suite for `vagrant`, `vagrant-libvirt`, and the Incus UI package while the rest
-of the Incus stack continues to come from Debian.
+The account profile fragment defines `incusops` as a normal client wrapper and
+`incusui` as `incus webui`. Both use the confined local connection; neither
+requires `incus-admin` or opens a persistent network listener. The managed host
+unit has no custom `ExecStop`; reverse dependency ordering leaves orderly
+instance shutdown to the package-owned `incus-startup.service` before the
+daemon stops. The addon creates no instances. Codex and ChatGPT receive no
+libvirt or Vagrant environment, home-path allowlist entries, or runtime socket
+injection; the QEMU/Incus addon does not add virtualization-specific sandbox
+state.
 
 `whisper.cfg` retains its existing compiler/toolchain and PipeWire package
 baseline when selected as `classes=...,whisper`; its manifest now explicitly

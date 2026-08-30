@@ -16,8 +16,8 @@ Before=shutdown.target
 Type=simple
 ExecStart=/usr/local/libexec/firstboot.sh
 
-StandardOutput=journal+console
-StandardError=journal+console
+StandardOutput=journal
+StandardError=journal
 
 TimeoutStartSec=0
 TimeoutStopSec=30s

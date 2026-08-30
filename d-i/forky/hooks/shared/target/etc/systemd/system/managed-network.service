@@ -21,8 +21,8 @@ RemainAfterExit=yes
 TimeoutStartSec=20s
 TimeoutStopSec=10s
 
-StandardOutput=journal+console
-StandardError=journal+console
+StandardOutput=journal
+StandardError=journal
 
 User=root
 Group=root

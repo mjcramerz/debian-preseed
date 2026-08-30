@@ -33,7 +33,7 @@ HEALTH_NOTIFY_UNIT="$ROOT_DIR/d-i/forky/hooks/role/desktop/target/etc/skel/.conf
 PLANS_NOTIFY_UNIT="$ROOT_DIR/d-i/forky/hooks/role/desktop/target/etc/skel/.config/systemd/user/labwc-plans.service"
 SOFTWARE_NOTIFY_UNIT="$ROOT_DIR/d-i/forky/hooks/role/desktop/target/etc/skel/.config/systemd/user/managed-external-software-notify.service"
 SOFTWARE_UPDATE_UNIT="$ROOT_DIR/d-i/forky/hooks/role/desktop/target/etc/systemd/system/managed-external-software-update.service"
-VIRT_HOST_UNIT="$ROOT_DIR/d-i/forky/hooks/role/desktop/target/etc/systemd/system/virt-host-managed.service"
+INCUS_HOST_UNIT="$ROOT_DIR/d-i/forky/hooks/role/desktop/target/etc/systemd/system/incus-host-managed.service"
 LABWC_ADMIN_WORKER_UNIT="$ROOT_DIR/d-i/forky/hooks/role/desktop/target/etc/systemd/system/labwc-admin-action@.service"
 APPARMOR_MODE_UNIT="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/systemd/system/apparmor-managed-modes.service"
 SECONDBOOT_UNIT="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/systemd/system/secondboot.service"
@@ -308,8 +308,8 @@ for installed_path in expected:
 
 expected_output.write_text("\n".join(expected) + "\n", encoding="utf-8")
 actual_output.write_text("\n".join(sorted(matched)) + "\n", encoding="utf-8")
-if len(expected) != 155:
-    errors.append(f"expected 155 staged executable wrapper paths, found {len(expected)}")
+if len(expected) != 151:
+    errors.append(f"expected 151 staged executable wrapper paths, found {len(expected)}")
 if errors:
     print("\n".join(errors), file=sys.stderr)
     raise SystemExit(1)
@@ -438,9 +438,9 @@ grub_fetch = (
 if grub_fetch not in btrfs_script or grub_fetch not in f2fs_script:
     errors.append("GRUB profile helpers must remain installer-only sourced input")
 
-if len(shebang_sources) != 160:
+if len(shebang_sources) != 156:
     errors.append(
-        f"expected 160 shebang-bearing hook assets, found {len(shebang_sources)}"
+        f"expected 156 shebang-bearing hook assets, found {len(shebang_sources)}"
     )
 if len(non_executable_sources) != 6:
     errors.append("expected six explicit non-executable shebang source contracts")
@@ -648,8 +648,8 @@ if len(application_paths) != 26:
         f"expected 26 managed application executable paths, found "
         f"{len(application_paths)}"
     )
-if len(desktop_entries) != 17:
-    errors.append(f"expected 17 managed desktop Exec entries, found {len(desktop_entries)}")
+if len(desktop_entries) != 16:
+    errors.append(f"expected 16 managed desktop Exec entries, found {len(desktop_entries)}")
 if errors:
     print("\n".join(errors), file=sys.stderr)
     raise SystemExit(1)
@@ -869,8 +869,8 @@ required_rules = (
     "/usr/local/lib/digital-assets/pipx/venvs/pdf2docx/bin/python rix,",
     "/usr/local/bin/whisper-cli rix,",
     "/data/whisper/bin/whisper-cli rix,",
-    "/usr/local/bin/whisper-server rCx -> whisper-server,",
-    "/data/whisper/bin/whisper-server rCx -> whisper-server,",
+    "/usr/local/bin/whisper-server rix,",
+    "/data/whisper/bin/whisper-server rix,",
     "/data/codex/share/bin/codex rPx -> managed-codex-runtime,",
     "/data/codex/share/bin/* mrix,",
     "deny /data/codex/config.schema.json wkl,",
@@ -1282,11 +1282,11 @@ for installed_path in sorted(managed_paths):
             )
         )
 
-if directive_count != 99:
-    errors.append(f"expected 99 systemd execution directives, found {directive_count}")
-if len(managed_paths) != 42:
+if directive_count != 87:
+    errors.append(f"expected 87 systemd execution directives, found {directive_count}")
+if len(managed_paths) != 39:
     errors.append(
-        f"expected 42 repository-managed systemd executable paths, found "
+        f"expected 39 repository-managed systemd executable paths, found "
         f"{len(managed_paths)}"
     )
 if errors:
@@ -1381,9 +1381,7 @@ managed-satty-runtime
 managed-managed-clamav-signature-update
 managed-managed-discord-distro
 managed-managed-external-software-update
-managed-virt-host-managed
-managed-virt-manager-virtops
-managed-virt-session-storage
+managed-incus-host-managed
 managed-tpm2-enroll-launch
 managed-tpm2-enroll
 '
@@ -1659,6 +1657,8 @@ allowed_network_profiles = {
     "managed-labwc-ai-llama-server",
     "whisper-http-client",
     "whisper-server",
+    "managed-whisper-record-toggle",
+    "managed-incus-host-managed",
 }
 allowed_global_profiles = {
     "managed-devops-toolchain",
@@ -1786,19 +1786,19 @@ fi
 unset plans_profile telpoll_profile
 
 labwc_session_profile=$(profile_block managed-labwc-session)
-virt_host_profile=$(profile_block managed-virt-host-managed)
+incus_host_profile=$(profile_block managed-incus-host-managed)
 if ! grep -R -Fq '/etc/skel' "$APPARMOR_DIR" &&
    printf '%s\n' "$labwc_session_profile" |
      grep -Fqx '  owner @{HOME}/.profile.d/ r,' &&
    printf '%s\n' "$labwc_session_profile" |
      grep -Fqx '  owner @{HOME}/.profile.d/* r,' &&
-   ! printf '%s\n' "$virt_host_profile" |
+   ! printf '%s\n' "$incus_host_profile" |
      grep -Fq '/etc/skel'; then
   pass "managed AppArmor profiles read installed user profile fragments and never reference /etc/skel"
 else
   fail "managed AppArmor profiles read installed user profile fragments and never reference /etc/skel"
 fi
-unset labwc_session_profile virt_host_profile
+unset labwc_session_profile incus_host_profile
 
 if grep -q '^  /usr/local/bin/labwc-fuzzel rPx -> managed-labwc-fuzzel,$' "$PROFILE" &&
    grep -q '^  /usr/local/bin/satty rPx -> managed-satty,$' "$PROFILE" &&
@@ -2189,7 +2189,7 @@ if grep -q '^  /usr/local/bin/labwc-fuzzel rPx -> managed-labwc-fuzzel,$' "$PROF
    profile_block chatgpt-dbus-proxy |
      grep -Fqx '    owner /run/user/[0-9]*/labwc-chatgpt-sandbox-*/{session-bus,system-bus} rw,' &&
    profile_block managed-codex-wrapper |
-     grep -Fqx '  owner @{HOME}/.profile.d/{71-devops-de.sh,72-virt-vagrant.sh,75-firmware-workspace.sh} r,' &&
+     grep -Fqx '  owner @{HOME}/.profile.d/{71-devops-de.sh,72-incus.sh,75-firmware-workspace.sh} r,' &&
    profile_block managed-codex-wrapper |
      grep -Fqx '  /usr/bin/{mise,pwsh,sccache} rix,' &&
    profile_block managed-codex-wrapper |
@@ -2231,19 +2231,11 @@ if grep -q '^  /usr/local/bin/labwc-fuzzel rPx -> managed-labwc-fuzzel,$' "$PROF
    profile_block managed-codex-wrapper |
      grep -Fqx '  owner /run/user/[0-9]*/ r,' &&
    profile_block managed-codex-wrapper |
-     grep -Fqx '  owner /run/user/[0-9]*/libvirt/libvirt-sock rw,' &&
-   profile_block managed-codex-wrapper |
      grep -Fqx '  /sys/bus/scsi/devices/ r,' &&
    profile_block managed-codex-wrapper |
      grep -Fqx '  /sys/class/{block,dmi,net,nvme}/ r,' &&
    profile_block managed-codex-wrapper |
      grep -Fqx '  /sys/devices/virtual/{block,dmi,net}/ r,' &&
-   profile_block managed-codex-wrapper |
-     grep -Fqx '  deny /run/libvirt/libvirt-sock rw,' &&
-   profile_block managed-codex-wrapper |
-     grep -Fqx '  owner /pool/vagrant/*/home/** rw,' &&
-   profile_block managed-codex-wrapper |
-     grep -Fqx '  owner /pool/libvirt/session/*/images/** rw,' &&
    profile_block managed-codex-wrapper |
      grep -Fqx '  owner @{HOME}/{Downloads,Workspace}/ rw,' &&
    profile_block managed-codex-wrapper |
@@ -2253,7 +2245,7 @@ if grep -q '^  /usr/local/bin/labwc-fuzzel rPx -> managed-labwc-fuzzel,$' "$PROF
    ! profile_block managed-codex-wrapper |
      grep -Fq 'owner @{HOME}/.ssh' &&
    profile_block managed-labwc-chatgpt |
-     grep -Fqx '  owner @{HOME}/.profile.d/{71-devops-de.sh,72-virt-vagrant.sh,75-firmware-workspace.sh} r,' &&
+     grep -Fqx '  owner @{HOME}/.profile.d/{71-devops-de.sh,72-incus.sh,75-firmware-workspace.sh} r,' &&
    profile_block managed-labwc-chatgpt |
      grep -Fqx '  /usr/bin/{mise,pwsh,sccache} rix,' &&
    profile_block managed-labwc-chatgpt |
@@ -2267,7 +2259,7 @@ if grep -q '^  /usr/local/bin/labwc-fuzzel rPx -> managed-labwc-fuzzel,$' "$PROF
    profile_block managed-labwc-chatgpt |
      grep -Fqx '  owner @{HOME}/.cmake/packages/ r,' &&
    profile_block managed-labwc-chatgpt |
-     grep -Fqx '  owner @{HOME}/.config/{bat,bazel,clangd,direnv,featherpad,fzf,git,micro,mise,nano,nvim,pip,powershell,retroarch,satty,sleek,task,vim,virt-manager,yamllint}/ r,' &&
+     grep -Fqx '  owner @{HOME}/.config/{bat,bazel,clangd,direnv,featherpad,fzf,git,micro,mise,nano,nvim,pip,powershell,retroarch,satty,sleek,task,vim,yamllint}/ r,' &&
    profile_block managed-labwc-chatgpt |
      grep -Fqx '  owner @{HOME}/.config/cargo/config.toml r,' &&
    profile_block managed-labwc-chatgpt |
@@ -2276,14 +2268,6 @@ if grep -q '^  /usr/local/bin/labwc-fuzzel rPx -> managed-labwc-fuzzel,$' "$PROF
      grep -Fqx '  owner @{HOME}/.config/Code/User/{keybindings.json,settings.json} r,' &&
    profile_block managed-labwc-chatgpt |
      grep -Fqx '  owner @{HOME}/.local/share/powershell/Modules/ r,' &&
-   profile_block managed-labwc-chatgpt |
-     grep -Fqx '  owner /run/user/[0-9]*/libvirt/libvirt-sock rw,' &&
-   profile_block managed-labwc-chatgpt |
-     grep -Fqx '  deny /run/libvirt/libvirt-sock rw,' &&
-   profile_block managed-labwc-chatgpt |
-     grep -Fqx '  owner /pool/vagrant/*/home/** rwkl,' &&
-   profile_block managed-labwc-chatgpt |
-     grep -Fqx '  owner /pool/libvirt/session/*/images/** rwkl,' &&
    profile_block managed-labwc-chatgpt |
      grep -Fqx '  /pool/ rw,' &&
    profile_block managed-labwc-chatgpt |
@@ -2322,42 +2306,16 @@ if grep -q '^  /usr/local/bin/labwc-fuzzel rPx -> managed-labwc-fuzzel,$' "$PROF
      grep -Fqx '    /pool/** rwklm,' &&
    profile_block chatgpt-bwrap |
      grep -Fqx '    /pool/** rix,' &&
-   profile_block managed-virt-session-storage |
-     grep -Fqx '  owner /run/user/[0-9]*/libvirt/libvirtd.lock rwk,' &&
-   profile_block managed-virt-session-storage |
-     grep -Fqx '  owner /run/user/[0-9]*/libvirt/libvirt-sock rw,' &&
-   profile_block managed-virt-session-storage |
-     grep -Fqx '  deny /run/libvirt/libvirt-sock rw,' &&
-   ! profile_block managed-virt-session-storage |
-     grep -Eq 'virtqemud-sock|virtstoraged-sock' &&
-   ! profile_block managed-virt-session-storage |
-     grep -Fq 'owner /run/user/[0-9]*/libvirt/**' &&
-   ! profile_block managed-virt-session-storage |
-     grep -Fq 'virt-session-storage/pool.' &&
-   profile_block managed-virt-manager-virtops |
-     grep -Fqx '  /usr/bin/{mise,sccache} rix,' &&
-   profile_block managed-virt-manager-virtops |
-     grep -Fqx '  /usr/bin/{systemctl,systemd-run} pux,' &&
-   profile_block managed-virt-manager-virtops |
-     grep -Fqx '  /usr/lib/llvm-24/bin/{clang,clang++,ld.lld,lld,lldb,llvm-config} rix,' &&
-   profile_block managed-virt-manager-virtops |
-     grep -Fqx '  /usr/local/lib/bazelisk/bazel rix,' &&
-   profile_block managed-virt-manager-virtops |
-     grep -Fqx '  /data/llama/lib/llama rix,' &&
-   profile_block managed-virt-manager-virtops |
-     grep -Fqx '  /dev/tty rw,' &&
-   profile_block managed-virt-manager-virtops |
-     grep -Fqx '  /sys/devices/system/node/ r,' &&
-   profile_block managed-virt-manager-virtops |
-     grep -Fqx '  owner /run/user/[0-9]*/libvirt/libvirtd.lock rwk,' &&
-   profile_block managed-virt-manager-virtops |
-     grep -Fqx '  owner /run/user/[0-9]*/libvirt/libvirt-sock rw,' &&
-   profile_block managed-virt-manager-virtops |
-     grep -Fqx '  deny /run/libvirt/libvirt-sock rw,' &&
-   ! profile_block managed-virt-manager-virtops |
-     grep -Eq 'virtqemud-sock|virtstoraged-sock' &&
-   ! profile_block managed-virt-manager-virtops |
-     grep -Fq 'owner /run/user/[0-9]*/libvirt/**' &&
+   profile_block managed-incus-host-managed |
+     grep -Fqx '  /etc/default/incus-host-managed r,' &&
+   profile_block managed-incus-host-managed |
+     grep -Fqx '  /var/lib/incus/unix.socket rw,' &&
+   profile_block managed-incus-host-managed |
+     grep -Fqx '  /var/lib/incus/unix.socket.user r,' &&
+   profile_block managed-incus-host-managed |
+     grep -Fqx '  network unix stream,' &&
+   ! profile_block managed-incus-host-managed |
+     grep -Eqi 'libvirt|vagrant|lxcfs|virt-manager' &&
    profile_block managed-labwc-chatgpt |
      grep -Fqx '  owner @{HOME}/{Downloads,Workspace}/** rwkl,' &&
    profile_block managed-labwc-chatgpt |
@@ -2628,8 +2586,6 @@ if grep -q '^  owner @{HOME}/Documents/OCR/[*][*] rwkl,$' "$PROFILE" &&
    grep -q '^  /dev/rfkill r,$' "$PROFILE" &&
    grep -q '^  /sys/class/bluetooth/hci[*] r,$' "$PROFILE" &&
    grep -q '^  /var/lib/software/[*][*] rwkl,$' "$PROFILE" &&
-   grep -q '^  /etc/lxc/default.conf r,$' "$PROFILE" &&
-   grep -q '^  /etc/lxc/lxc.conf rw,$' "$PROFILE" &&
     grep -q '^  /usr/local/lib/crypto/tpm2-enroll.complete rwk,$' "$PROFILE" &&
     grep -q '^  owner @{HOME}/[*][*] r,$' "$PROFILE" &&
     profile_block managed-labwc-session |
@@ -2648,11 +2604,11 @@ whisper_http_profile=$(profile_block whisper-http-client)
 whisper_server_profile=$(profile_block whisper-server)
 whisper_record_profile=$(profile_block whisper-record)
 if printf '%s\n' "$whisper_toggle_profile" |
-     grep -Fqx '  /usr/local/bin/whisper-server rCx -> whisper-server,' &&
+     grep -Fqx '  /usr/local/bin/whisper-server rix,' &&
    printf '%s\n' "$whisper_toggle_profile" |
-     grep -Fqx '  /data/whisper/bin/whisper-server rCx -> whisper-server,' &&
+     grep -Fqx '  /data/whisper/bin/whisper-server rix,' &&
    printf '%s\n' "$whisper_toggle_profile" |
-     grep -Fqx '  /usr/bin/curl rCx -> whisper-http-client,' &&
+     grep -Fqx '  /usr/bin/curl rix,' &&
    printf '%s\n' "$whisper_toggle_profile" |
      grep -Fqx '  /usr/bin/pw-record rCx -> whisper-record,' &&
    printf '%s\n' "$whisper_toggle_profile" |
@@ -2667,9 +2623,9 @@ if printf '%s\n' "$whisper_toggle_profile" |
      grep -Fqx '    /usr/bin/pw-cat rix,' &&
    ! printf '%s\n' "$whisper_toggle_profile" |
      grep -Eq 'whisper-(server|http-client|record).*r[Pp]x'; then
-  pass "Whisper control keeps HTTP, server, and recorder execution in nested child domains"
+  pass "Whisper control inherits NNP HTTP/server execution while retaining the recorder child domain"
 else
-  fail "Whisper control keeps HTTP, server, and recorder execution in nested child domains"
+  fail "Whisper control inherits NNP HTTP/server execution while retaining the recorder child domain"
 fi
 unset whisper_http_profile whisper_record_profile whisper_server_profile whisper_toggle_profile
 
@@ -2748,7 +2704,7 @@ if awk '
        }
      }
      END {
-       exit(rows == 73 && !invalid ? 0 : 1)
+       exit(rows == 64 && !invalid ? 0 : 1)
      }
    ' "$MODE_CONFIG" &&
    ! grep -Eq '^(enforce|complain|disable)[[:space:]]' "$MODE_CONFIG" &&
@@ -2758,9 +2714,9 @@ if awk '
    [ "$(grep -c ' managed-desktop-wrappers ' "$MODE_CONFIG")" -eq 1 ] &&
    [ "$(grep -c ' managed-system-wrappers ' "$MODE_CONFIG")" -eq 1 ] &&
    [ "$(grep -c ' usr.sbin.aa-status ' "$MODE_CONFIG")" -eq 1 ]; then
-  pass "managed AppArmor source template uses the desktop-state placeholder for all 73 rows"
+  pass "managed AppArmor source template uses the desktop-state placeholder for all 64 rows"
 else
-  fail "managed AppArmor source template uses the desktop-state placeholder for all 73 rows"
+  fail "managed AppArmor source template uses the desktop-state placeholder for all 64 rows"
 fi
 
 desktop_profile_paths="$TMP_DIR/desktop-profile-paths"
@@ -2837,7 +2793,7 @@ if (
          exit 1
        }
      }
-     END { exit(rows == 73 ? 0 : 1) }
+     END { exit(rows == 64 ? 0 : 1) }
    ' "$complain_config" &&
    awk '
      $0 !~ /^[[:space:]]*(#|$)/ {
@@ -2846,7 +2802,7 @@ if (
          exit 1
        }
      }
-     END { exit(rows == 73 ? 0 : 1) }
+     END { exit(rows == 64 ? 0 : 1) }
    ' "$enforce_config" &&
    awk '$0 !~ /^[[:space:]]*(#|$)/ { print $2, $3, $4 }' \
      "$complain_config" >"$mode_fields_complain" &&
@@ -2951,9 +2907,9 @@ if (
      apparmor_apply_desktop_state "$malformed_config"
    ) 2>"$malformed_stderr" &&
    grep -q 'every declared managed AppArmor profile' "$malformed_stderr"; then
-  pass "installer renders all 73 placeholder rows and rejects fixed or unsupported source states"
+  pass "installer renders all 64 placeholder rows and rejects fixed or unsupported source states"
 else
-  fail "installer renders all 73 placeholder rows and rejects fixed or unsupported source states"
+  fail "installer renders all 64 placeholder rows and rejects fixed or unsupported source states"
 fi
 
 if grep -q '^NoNewPrivileges=yes$' "$BLUETOOTH_UNIT" &&
@@ -2980,7 +2936,7 @@ if grep -q '^NoNewPrivileges=yes$' "$BLUETOOTH_UNIT" &&
    grep -q '^NoNewPrivileges=false$' "$CLAMAV_UPDATE_UNIT" &&
    grep -q '^NoNewPrivileges=false$' "$SOFTWARE_UPDATE_UNIT" &&
    grep -q '^ReadWritePaths=/sys/kernel/security/apparmor /var/cache/apparmor$' "$SOFTWARE_UPDATE_UNIT" &&
-   grep -q '^NoNewPrivileges=false$' "$VIRT_HOST_UNIT" &&
+   grep -q '^NoNewPrivileges=true$' "$INCUS_HOST_UNIT" &&
    profile_block managed-apparmor-managed-modes |
      grep -Fqx '  /usr/sbin/{aa-audit,aa-complain,aa-enforce,apparmor_parser} PUx,' &&
    profile_block managed-managed-clamav-signature-update |
@@ -3001,8 +2957,8 @@ if grep -q '^NoNewPrivileges=yes$' "$BLUETOOTH_UNIT" &&
      grep -Fqx '  /run/user/0/gnupg/** rwkl,' &&
    profile_block managed-managed-external-software-update |
      grep -Fqx '  /var/lib/software/** rwkl,' &&
-   profile_block managed-virt-host-managed |
-     grep -Fqx '  /usr/bin/{findmnt,incus,lxc-config,systemd-tmpfiles,virsh} PUx,'; then
+   profile_block managed-incus-host-managed |
+     grep -Fqx '  /usr/bin/{curl,date,grep,incus,readlink,sleep,stat,systemd-tmpfiles} rix,'; then
   pass "systemd execution settings preserve managed AppArmor transitions without filesystem namespace interference"
 else
   fail "systemd execution settings preserve managed AppArmor transitions without filesystem namespace interference"
@@ -3158,6 +3114,7 @@ allowed_process_metadata_rules = {
     ("waypaper-ps", "@{PROC}/[0-9]*/{cmdline,environ,stat,status} r,"),
     ("managed-satty-runtime", "owner @{PROC}/@{pid}/cmdline r,"),
     ("whisper-server", "owner @{PROC}/@{pid}/cmdline r,"),
+    ("managed-whisper-record-toggle", "owner @{PROC}/@{pid}/cmdline r,"),
 }
 allowed_ps_rules = {
     ("managed-waypaper", "/usr/bin/ps rCx -> waypaper-ps,"),
@@ -3651,16 +3608,6 @@ shared_shell_functions = set(
         re.MULTILINE,
     )
 )
-sourced_shell_function_sources = {
-    "d-i/forky/hooks/role/desktop/target/usr/local/bin/virt-manager-virtops": (
-        root
-        / "d-i/forky/hooks/role/desktop/target/etc/skel/.profile.d/71-devops-de.sh",
-        root
-        / "d-i/forky/hooks/role/desktop/target/etc/skel/.profile.d/72-virt-vagrant.sh.tmpl",
-    ),
-}
-
-
 def dotted_name(node):
     if isinstance(node, ast.Name):
         return node.id
@@ -3708,14 +3655,6 @@ for source_path, owner_attachments in sorted(
     )
     functions.update(shared_shell_functions)
     source_key = source_path.relative_to(root).as_posix()
-    for sourced_function_path in sourced_shell_function_sources.get(source_key, ()):
-        functions.update(
-            re.findall(
-                r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*[\{\(]",
-                sourced_function_path.read_text(encoding="utf-8"),
-                re.MULTILINE,
-            )
-        )
     commands = set()
     for command_pattern in command_patterns:
         commands.update(command_pattern.findall(source_text))
@@ -4008,14 +3947,14 @@ else
 fi
 unset greeter_output_profile_block greeter_power_profile_block greeter_profile_block
 
-VIRT_UNIT="$ROOT_DIR/d-i/forky/hooks/role/desktop/target/etc/systemd/system/virt-host-managed.service"
+INCUS_UNIT="$ROOT_DIR/d-i/forky/hooks/role/desktop/target/etc/systemd/system/incus-host-managed.service"
 QEMU_LATE="$ROOT_DIR/d-i/forky/scripts/late/qemu.sh"
-if grep -q '^profile managed-virt-host-managed /usr/local/libexec/virt-host-managed ' "$PROFILE" &&
+if grep -q '^profile managed-incus-host-managed /usr/local/libexec/incus-host-managed ' "$PROFILE" &&
    grep -q '^profile managed-tpm2-enroll-launch /usr/local/bin/tpm2-enroll-launch ' "$PROFILE" &&
    grep -q '^profile managed-tpm2-enroll /usr/local/sbin/tpm2-enroll[.]sh ' "$PROFILE" &&
-   grep -q '^ExecStart=/usr/local/libexec/virt-host-managed$' "$VIRT_UNIT" &&
-   grep -q 'run_in_target "prepare managed virtualization install-time filesystem state" /usr/local/libexec/virt-host-managed --prepare-install' "$QEMU_LATE" &&
-   ! grep -q 'ExecStart=/bin/sh /usr/local/libexec/virt-host-managed' "$VIRT_UNIT"; then
+   grep -q '^ExecStart=/usr/local/libexec/incus-host-managed$' "$INCUS_UNIT" &&
+   grep -q 'run_in_target "prepare direct QEMU and Incus storage roots"' "$QEMU_LATE" &&
+   ! grep -q 'ExecStart=/bin/sh /usr/local/libexec/incus-host-managed' "$INCUS_UNIT"; then
   pass "desktop sbin and TPM helpers enter their profiles through direct execution"
 else
   fail "desktop sbin and TPM helpers enter their profiles through direct execution"

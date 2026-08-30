@@ -1781,13 +1781,15 @@ codex_wrapper_mount_helpers_work() {
 codex_wrapper_generates_synthetic_installation_ids() {
   wrapper_library="${TMP_DIR}/codex-wrapper-identity-library"
   runtime_root="${TMP_DIR}/codex-runtime"
+  identity_home="${TMP_DIR}/codex-identity-home"
 
   sed \
     -e "s|readonly CODEX_RUNTIME_ROOT=\"/data/codex/runtime\"|readonly CODEX_RUNTIME_ROOT=\"${runtime_root}\"|" \
     -e '$d' \
     "$codex_wrapper" >"$wrapper_library"
+  install -d -m 0700 "$identity_home"
 
-  /usr/bin/env -i PATH=/usr/bin:/bin HOME="$HOME" PWD=/tmp \
+  /usr/bin/env -i PATH=/usr/bin:/bin HOME="$identity_home" PWD=/tmp \
     /bin/bash -Eeuo pipefail -c '
       # shellcheck disable=SC1090
       . "$1"
@@ -2083,214 +2085,27 @@ codex_wrapper_path_boundaries_work() {
   wrapper_library="${TMP_DIR}/codex-wrapper-path-library"
   test_root="${TMP_DIR}/codex-paths"
   test_home="${test_root}/home"
-  downloads="${test_home}/Downloads"
-  downloads_project="${downloads}/artifact"
   workspace="${test_home}/Workspace"
   workspace_project="${workspace}/project"
-  pool_root="${test_root}/pool"
-  pool_project="${pool_root}/project"
-  codex_storage_root="${test_root}/data-codex"
-  codex_storage_project="${codex_storage_root}/project"
-  codex_runtime_root="${codex_storage_root}/runtime"
-  codex_runtime_cwd="${codex_runtime_root}/session"
-  shared_downloads_root="${test_root}/data-downloads"
-  shared_downloads_project="${shared_downloads_root}/artifact"
-  fallback_cwd="${ROOT_DIR}"
-  runtime_dir="${test_root}/runtime"
-  libvirt_dir="${runtime_dir}/libvirt"
-  runtime_cwd_error="${TMP_DIR}/codex-runtime-cwd.error"
-  current_uid=$(id -u)
+  sed '$d' "$codex_wrapper" >"$wrapper_library"
+  install -d -m 0777 -- "$test_home" "$test_home/.config" "$test_home/.config/bazel" "$test_home/Downloads" "$workspace" "$workspace_project"
 
-  python3 - \
-    "$codex_wrapper" \
-    "$wrapper_library" \
-    "$runtime_dir" \
-    "$pool_root" \
-    "$codex_storage_root" \
-    "$codex_runtime_root" \
-    "$shared_downloads_root" <<'PY'
-from pathlib import Path
-import sys
-
-source = Path(sys.argv[1]).read_text(encoding="utf-8")
-source = source.rsplit("\n", 2)[0] + "\n"
-source = source.replace(
-    '  local runtime_dir="/run/user/${uid}"',
-    f'  local runtime_dir="{sys.argv[3]}"',
-)
-source = source.replace(
-    'readonly CODEX_POOL_ROOT="/pool"',
-    f'readonly CODEX_POOL_ROOT="{sys.argv[4]}"',
-)
-source = source.replace(
-    'readonly CODEX_STORAGE_ROOT="/data/codex"',
-    f'readonly CODEX_STORAGE_ROOT="{sys.argv[5]}"',
-)
-source = source.replace(
-    'readonly CODEX_RUNTIME_ROOT="/data/codex/runtime"',
-    f'readonly CODEX_RUNTIME_ROOT="{sys.argv[6]}"',
-)
-source = source.replace(
-    'readonly CODEX_SHARED_DOWNLOADS_ROOT="/data/downloads"',
-    f'readonly CODEX_SHARED_DOWNLOADS_ROOT="{sys.argv[7]}"',
-)
-Path(sys.argv[2]).write_text(source, encoding="utf-8")
-PY
-  install -d -m 0700 -- \
-    "$test_home" \
-    "$downloads" \
-    "$downloads_project" \
-    "$workspace" \
-    "$workspace_project" \
-    "$pool_root" \
-    "$pool_project" \
-    "$codex_storage_root" \
-    "$codex_storage_project" \
-    "$codex_runtime_root" \
-    "$codex_runtime_cwd" \
-    "$shared_downloads_root" \
-    "$shared_downloads_project" \
-    "$test_home/.config" \
-    "$test_home/.config/bazel" \
-    "$runtime_dir" \
-    "$libvirt_dir"
-
-  /usr/bin/env -i \
-    HOME="$test_home" \
-    USER="$(id -un)" \
-    PATH=/usr/bin:/bin \
+  /usr/bin/env -i HOME="$test_home" USER="$(id -un)" PATH=/usr/bin:/bin \
     /bin/bash -Eeuo pipefail -c '
-      # shellcheck disable=SC1090
       . "$1"
-
+      codex_require_account_owned_home_directory HOME "$HOME"
+      codex_require_account_owned_home_directory "managed Workspace directory" "$HOME/Workspace"
       BWRAP_ARGS=()
       codex_append_home_ro_bind_if_present .config/bazel
       [[ "${BWRAP_ARGS[${#BWRAP_ARGS[@]} - 3]}" == --ro-bind ]]
+      cd "$2"
+      [[ "$(codex_select_sandbox_cwd)" == "$2" ]]
+    ' bash "$wrapper_library" "$workspace_project" || return 1
 
-      shift
-      fallback=${!#}
-      while (($# > 1)); do
-        cd "$1"
-        PWD=/tmp/../etc
-        [[ "$(codex_select_sandbox_cwd)" == "$1" ]]
-        shift
-      done
-      cd "$fallback"
-      [[ "$(codex_select_sandbox_cwd)" == "${HOME}/Workspace" ]]
-    ' bash \
-      "$wrapper_library" \
-      "$downloads_project" \
-      "$workspace_project" \
-      "$pool_project" \
-      "$codex_storage_project" \
-      "$shared_downloads_project" \
-      "$fallback_cwd" ||
-    return 1
-
-  chmod 0755 -- "$test_home/.config" "$test_home/.config/bazel"
-  /usr/bin/env -i HOME="$test_home" PATH=/usr/bin:/bin \
-    /bin/bash -Eeuo pipefail -c '
-      # shellcheck disable=SC1090
-      . "$1"
-      BWRAP_ARGS=()
-      codex_append_home_ro_bind_if_present .config/bazel
-      [[ "${BWRAP_ARGS[${#BWRAP_ARGS[@]} - 3]}" == --ro-bind ]]
-    ' bash "$wrapper_library" ||
-    return 1
-
-  if /usr/bin/env -i \
-       HOME="$test_home" \
-       USER="$(id -un)" \
-       PATH=/usr/bin:/bin \
-       /bin/bash -Eeuo pipefail -c '
-         # shellcheck disable=SC1090
-         . "$1"
-         cd "$2"
-         codex_select_sandbox_cwd
-       ' bash "$wrapper_library" "$codex_runtime_cwd" \
-       > /dev/null 2>"$runtime_cwd_error"; then
-    return 1
-  fi
-  grep -Fqx \
-    "codex-wrapper: fatal: cannot preserve a working directory under ${codex_runtime_root}: managed runtime control state is masked in the sandbox" \
-    "$runtime_cwd_error" ||
-    return 1
-
-  chmod 0777 -- "$test_home/.config"
-  /usr/bin/env -i HOME="$test_home" PATH=/usr/bin:/bin \
-    /bin/bash -Eeuo pipefail -c '
-      # shellcheck disable=SC1090
-      . "$1"
-      BWRAP_ARGS=()
-      codex_append_home_ro_bind_if_present .config/bazel
-      [[ "${BWRAP_ARGS[${#BWRAP_ARGS[@]} - 3]}" == --ro-bind ]]
-    ' bash "$wrapper_library" ||
-    return 1
-  chmod 0755 -- "$test_home/.config"
-
-  chmod 0777 -- "$test_home/.config/bazel"
+  ln -s -- "$test_home/.config/bazel" "$test_home/.config/bazel-link"
   if /usr/bin/env -i HOME="$test_home" PATH=/usr/bin:/bin \
-       /bin/bash -Eeuo pipefail -c '
-         # shellcheck disable=SC1090
-         . "$1"
-         BWRAP_ARGS=()
-         codex_append_home_ro_bind_if_present .config/bazel
-       ' bash "$wrapper_library" >/dev/null 2>&1; then
-    return 1
-  fi
-  chmod 0755 -- "$test_home/.config/bazel"
-
-  /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -Eeuo pipefail -c '
-    # shellcheck disable=SC1090
-    . "$1"
-    BWRAP_ARGS=()
-    codex_append_session_libvirt_socket_if_present "$2"
-    [[ "${#BWRAP_ARGS[@]}" -eq 0 ]]
-  ' bash "$wrapper_library" "$current_uid" ||
-    return 1
-
-  python3 - "$libvirt_dir/libvirt-sock" <<'PY'
-import os
-import stat
-import sys
-
-for socket_path in sys.argv[1:]:
-    os.mknod(socket_path, stat.S_IFSOCK | 0o600)
-    assert stat.S_ISSOCK(os.stat(socket_path, follow_symlinks=False).st_mode)
-PY
-  /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -Eeuo pipefail -c '
-    # shellcheck disable=SC1090
-    . "$1"
-    BWRAP_ARGS=()
-    codex_append_session_libvirt_socket_if_present "$2"
-    [[ "${#BWRAP_ARGS[@]}" -eq 5 ]]
-    [[ "${BWRAP_ARGS[0]}" == --dir ]]
-    [[ "${BWRAP_ARGS[1]}" == "$3" ]]
-    [[ "${BWRAP_ARGS[2]}" == --bind ]]
-    [[ "${BWRAP_ARGS[3]}" == "$3/libvirt-sock" ]]
-    [[ "${BWRAP_ARGS[4]}" == "$3/libvirt-sock" ]]
-  ' bash "$wrapper_library" "$current_uid" "$libvirt_dir" ||
-    return 1
-
-  rm -f -- "$libvirt_dir/libvirt-sock"
-  rmdir -- "$libvirt_dir"
-  install -d -m 0700 -- "${test_root}/libvirt-target"
-  python3 - "${test_root}/libvirt-target/libvirt-sock" <<'PY'
-import os
-import stat
-import sys
-
-for socket_path in sys.argv[1:]:
-    os.mknod(socket_path, stat.S_IFSOCK | 0o600)
-    assert stat.S_ISSOCK(os.stat(socket_path, follow_symlinks=False).st_mode)
-PY
-  ln -s -- "${test_root}/libvirt-target" "$libvirt_dir"
-  if /usr/bin/env -i PATH=/usr/bin:/bin /bin/bash -Eeuo pipefail -c '
-       # shellcheck disable=SC1090
-       . "$1"
-       BWRAP_ARGS=()
-       codex_append_session_libvirt_socket_if_present "$2"
-     ' bash "$wrapper_library" "$current_uid" >/dev/null 2>&1; then
+       /bin/bash -Eeuo pipefail -c '. "$1"; BWRAP_ARGS=(); codex_append_home_ro_bind_if_present .config/bazel-link' \
+       bash "$wrapper_library" >/dev/null 2>&1; then
     return 1
   fi
 }
@@ -2333,7 +2148,8 @@ assert '"${CODEX_SHARED_DOWNLOADS_ROOT}"' in wrapper
 assert 'codex_require_directory "pool cache root" /pool/cache' not in wrapper
 assert 'codex_require_directory "pool build root" /pool/build' not in wrapper
 assert 'codex_require_directory "pool database root" /pool/db' not in wrapper
-assert '"${account_uid}" \\\n      "${USER}" \\\n      755 \\\n      1' in wrapper
+assert 'codex_require_account_owned_home_directory' in wrapper
+assert '"managed ${home_directory} directory"' in wrapper
 assert '    0 \\\n    devops \\\n    2775 \\\n    1' in wrapper
 assert "      0 \\\n      devops \\\n      2770 \\\n      1" in wrapper
 assert '"${account_uid}" \\\n      devops \\\n      2770 \\\n      1' in wrapper
@@ -2457,15 +2273,11 @@ memory_guard = position(
 )
 selective_home = position("  codex_append_selective_home_access\n")
 accelerator_devices = position("  codex_append_accelerator_device_binds\n")
-session_libvirt = position(
-    '  codex_append_session_libvirt_socket_if_present "${uid}"\n'
-)
-
 assert root_ro < data_ro < pool_rw < sys_ro < codex_storage_rw
 assert codex_storage_rw < shared_downloads_rw < runtime_home_rw
 assert data_ro < runtime_home_rw < installation_id < log_rw < sqlite_rw
 assert sqlite_rw < runtime_tmpfs < memory_guard < selective_home
-assert selective_home < accelerator_devices < session_libvirt
+assert selective_home < accelerator_devices
 assert (
     '  codex_require_devops_shared_account_directory \\\n'
     '    "managed Codex host log directory" \\\n'
@@ -2488,13 +2300,6 @@ for redundant in (
     assert f'--bind "{redundant}" "{redundant}"' not in wrapper
 assert 'rm -rf -- "${CODEX_MEMORY_GIT_GUARD}"' not in wrapper
 assert "sandbox_cwd=$(codex_select_sandbox_cwd)" in wrapper
-assert '[[ -S "${libvirt_socket}" && ! -L "${libvirt_socket}" ]]' in wrapper
-assert '[[ "${socket_owner}" == "${uid}" ]]' in wrapper
-assert '--bind "${libvirt_socket}" "${libvirt_socket}"' in wrapper
-assert '"${libvirt_dir}/libvirt-sock"' in wrapper
-assert '"${libvirt_dir}/virtqemud-sock"' not in wrapper
-assert '"${libvirt_dir}/virtstoraged-sock"' not in wrapper
-assert "/run/libvirt/libvirt-sock" not in wrapper
 unset_environment = re.search(
     r"declare -a SANDBOX_UNSET_ENV_NAMES=\(\n(?P<body>.*?)\n\)",
     wrapper,
@@ -2816,7 +2621,6 @@ expected_home_directories = (
     ".config/sleek",
     ".config/task",
     ".config/vim",
-    ".config/virt-manager",
     ".config/yamllint",
     ".local/bin",
     ".local/lib",
@@ -2838,8 +2642,6 @@ expected_home_files = (
     ".config/containers/storage.conf",
     ".config/gh/config.yml",
     ".config/go/env",
-    ".config/libvirt/libvirt.conf",
-    ".config/libvirt/qemu.conf",
     ".config/mimeapps.list",
     ".config/obsidian/obsidian.json",
     ".config/starship.toml",
@@ -2859,13 +2661,12 @@ expected_home_files = (
     ".markdownlint.yml",
     ".profile",
     ".profile.d/71-devops-de.sh",
-    ".profile.d/72-virt-vagrant.sh",
+    ".profile.d/72-incus.sh",
     ".profile.d/75-firmware-workspace.sh",
     ".recoll/recoll.conf",
     ".ripgreprc",
     ".rustfmt.toml",
     ".shellcheckrc",
-    ".vagrant.d/Vagrantfile",
     ".vimrc",
     ".zlogin",
     ".zlogout",
@@ -4204,7 +4005,7 @@ if /bin/bash -n "$codex_wrapper" &&
    grep -Fq 'readonly CODEX_USER_ROOT="/data/codex/usr"' "$codex_wrapper" &&
    grep -Fq 'readonly CODEX_DEVOPS_GROUP="devops"' "$codex_wrapper" &&
    grep -Fq 'umask 077' "$codex_wrapper" &&
-   grep -Fq 'managed DevOps profile must be an invoking-account-owned mode-0600 regular file' "$codex_wrapper" &&
+   grep -Fq 'managed DevOps profile must remain owned by the invoking account' "$codex_wrapper" &&
    grep -Fq 'codex_activate_devops_environment' "$codex_wrapper" &&
    grep -Fq 'declare -a CODEX_DEVOPS_ENV_NAMES=()' "$codex_wrapper" &&
    grep -Fq 'codex_collect_devops_environment' "$codex_wrapper" &&
@@ -4231,7 +4032,8 @@ if /bin/bash -n "$codex_wrapper" &&
    grep -Fq -- '--bind "${CODEX_POOL_ROOT}" "${CODEX_POOL_ROOT}"' "$codex_wrapper" &&
    grep -Fq -- '--ro-bind /sys /sys' "$codex_wrapper" &&
    grep -Fq 'codex_append_accelerator_device_binds' "$codex_wrapper" &&
-   grep -Fq 'codex_append_session_libvirt_socket_if_present "${uid}"' "$codex_wrapper" &&
+   grep -Fq 'codex_require_account_owned_home_directory "HOME" "${HOME}"' "$codex_wrapper" &&
+   ! grep -Fq 'codex_append_session_libvirt_socket_if_present' "$codex_wrapper" &&
    ! grep -Fq '    --tmpfs /var/lib/AccountsService' "$codex_wrapper" &&
    ! grep -Fq '    --tmpfs /etc/netplan' "$codex_wrapper" &&
    grep -Fq 'codex_append_required_ro_bind_to_existing_path' "$codex_wrapper" &&
@@ -4263,15 +4065,15 @@ else
 fi
 
 if codex_wrapper_path_boundaries_work; then
-  pass "Codex accepts canonical account-owned HOME bind parents without weakening bound sources, working directories, or private libvirt sockets"
+  pass "Codex accepts canonical account-owned HOME bind parents without imposing HOME permission modes or weakening path ownership and symlink checks"
 else
-  fail "Codex accepts canonical account-owned HOME bind parents without weakening bound sources, working directories, or private libvirt sockets"
+  fail "Codex accepts canonical account-owned HOME bind parents without imposing HOME permission modes or weakening path ownership and symlink checks"
 fi
 
 if codex_wrapper_work_area_guards_work; then
-  pass "Codex rejects missing, indirect, misowned, misgrouped, mis-moded, or unwritable managed work areas before direct or sandboxed launch"
+  pass "Codex rejects missing, indirect, misowned, misgrouped, mis-moded, or unwritable system-managed work areas before direct or sandboxed launch"
 else
-  fail "Codex rejects missing, indirect, misowned, misgrouped, mis-moded, or unwritable managed work areas before direct or sandboxed launch"
+  fail "Codex rejects missing, indirect, misowned, misgrouped, mis-moded, or unwritable system-managed work areas before direct or sandboxed launch"
 fi
 
 if codex_wrapper_generates_synthetic_installation_ids; then
@@ -4516,6 +4318,7 @@ if /bin/sh -n "$devops_profile" &&
    ! grep -Fq 'devops_de_corepack_exec' "$devops_profile" &&
    grep -Fq '[ -x /usr/local/lib/bazelisk/bazel ]' "$devops_profile" &&
    ! grep -Fq 'DEVOPS_DE_VAGRANT_ENABLED=' "$devops_profile" &&
+   ! grep -Eqi 'virtops|libvirt|vagrant|virsh|incusops|incusui' "$devops_profile" &&
    grep -Fq 'bazel() {' "$devops_profile" &&
    grep -Fq 'command /usr/local/lib/bazelisk/bazel' "$devops_profile" &&
    grep -Fq '"--bazelrc=${XDG_CONFIG_HOME:-${HOME}/.config}/bazel/bazelrc"' "$devops_profile" &&
@@ -4530,9 +4333,9 @@ if /bin/sh -n "$devops_profile" &&
    ! grep -Eq 'LLAMA_|/etc/llama|llama-server|DEFAULT_MODEL|MODEL_DIR' "$devops_profile" &&
    ! grep -Eq 'mise exec.*(clang|llvm|lld|bazel)' "$devops_profile" &&
    ! grep -Fq 'eval "$(mise activate' "$devops_profile"; then
-  pass "desktop DevOps profile is opt-in, enters a same-terminal nested shell without IPC, keeps state on /pool, leaves virtualization activation to virtops, and exports fixed nightly Rustup state"
+  pass "desktop DevOps profile is opt-in, enters a same-terminal nested shell without IPC, keeps state on /pool, contains no virtualization activation, and exports fixed nightly Rustup state"
 else
-  fail "desktop DevOps profile is opt-in, enters a same-terminal nested shell without IPC, keeps state on /pool, leaves virtualization activation to virtops, and exports fixed nightly Rustup state"
+  fail "desktop DevOps profile is opt-in, enters a same-terminal nested shell without IPC, keeps state on /pool, contains no virtualization activation, and exports fixed nightly Rustup state"
 fi
 
 if bash -n "$devops_bashrc" &&
@@ -5586,7 +5389,13 @@ for profile_relpath in $desktop_profiles; do
   awk '
     /^# Optional managed Codex policy/ { capture = 1 }
     /^# Optional DevOps Cargo policy/ { capture = 0 }
-    capture { print }
+    capture {
+      if ($0 ~ /^DEVOPS_CODEX_REPOSITORY_COMMIT=/) {
+        print "DEVOPS_CODEX_REPOSITORY_COMMIT=\"<profile-pinned>\""
+      } else {
+        print
+      }
+    }
   ' "$profile_path" >"$codex_profile_block"
   if [ "$codex_profile_index" -eq 0 ]; then
     cp "$codex_profile_block" "$codex_reference_block"

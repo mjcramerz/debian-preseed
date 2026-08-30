@@ -30,6 +30,7 @@ template_script="$ROOT_DIR/d-i/forky/scripts/late/templates.sh"
 tmpfiles_roots="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/tmpfiles.d/10-runtime-storage-roots.conf"
 tmpfiles_temporary="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/tmpfiles.d/tmp.conf"
 creds_override="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/systemd/system/systemd-creds.socket.d/10-encrypted-only.conf"
+var_log_mount_override="$ROOT_DIR/d-i/forky/hooks/shared/target/etc/systemd/system/var-log.mount.d/override.conf"
 
 if grep -q '^DIR_DATA_CONFIG="${DIR_DATA}/config"$' "$runtime_env" &&
    grep -q '^DIR_DATA_SERVICES_USR="${DIR_DATA_SERVICES}/usr"$' "$runtime_env" &&
@@ -39,10 +40,11 @@ if grep -q '^DIR_DATA_CONFIG="${DIR_DATA}/config"$' "$runtime_env" &&
    grep -q '^DIR_DATA_PKI="${DIR_DATA}/pki"$' "$runtime_env" &&
    grep -q '^DIR_DATA_BACKUP="${DIR_DATA}/backup"$' "$runtime_env" &&
    grep -q '^DIR_POOL_BUILD="${DIR_POOL}/build"$' "$runtime_env" &&
-   grep -q '^DIR_POOL_LIBVIRT="${DIR_POOL}/libvirt"$' "$runtime_env" &&
+   grep -q '^DIR_POOL_QEMU="${DIR_POOL}/qemu"$' "$runtime_env" &&
    grep -q '^DIR_POOL_INCUS="${DIR_POOL}/incus"$' "$runtime_env" &&
-   grep -q '^DIR_POOL_LXC="${DIR_POOL}/lxc"$' "$runtime_env" &&
-   grep -q '^DIR_POOL_VAGRANT="${DIR_POOL}/vagrant"$' "$runtime_env" &&
+   ! grep -q '^DIR_POOL_LIBVIRT=' "$runtime_env" &&
+   ! grep -q '^DIR_POOL_LXC=' "$runtime_env" &&
+   ! grep -q '^DIR_POOL_VAGRANT=' "$runtime_env" &&
    grep -q '^DIR_POOL_PODMAN="${DIR_POOL}/podman"$' "$runtime_env" &&
    grep -q '^DIR_POOL_LOG="${DIR_POOL}/log"$' "$runtime_env" &&
    ! grep -q '^DIR_POOL_BUILDS=' "$runtime_env"; then
@@ -171,10 +173,11 @@ if printf '%s\n' "$tmpfs_pre_clean_function" |
    printf '%s\n' "$tmpfs_pre_clean_function" |
      grep -q 'stage_target_tmpfs_pre_clean_mount_override_if_enabled TMPFS_DEV_SHM' &&
    printf '%s\n' "$tmpfs_pre_clean_function" |
-     grep -q 'stage_target_tmpfs_pre_clean_mount_override_if_enabled TMPFS_VAR_LOG'; then
-  pass "volatile storage stages the boot-time pre-clean service and mount dependencies for tmpfs roots"
+     grep -q 'stage_target_tmpfs_pre_clean_mount_override_if_enabled TMPFS_VAR_LOG' &&
+   grep -Fxq 'Before=systemd-logind.service systemd-user-sessions.service' "$var_log_mount_override"; then
+  pass "volatile storage stages pre-clean dependencies and keeps /var/log writable through session shutdown"
 else
-  fail "volatile storage stages the boot-time pre-clean service and mount dependencies for tmpfs roots"
+  fail "volatile storage stages pre-clean dependencies and keeps /var/log writable through session shutdown"
 fi
 
 tmpfs_pre_clean_verify_function=$(

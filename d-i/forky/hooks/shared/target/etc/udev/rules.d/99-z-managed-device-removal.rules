@@ -1,9 +1,0 @@
-# Managed by unattended-installer.
-# systemd's 99-systemd.rules attaches activation targets without restricting
-# the event action. Clear the activation properties afterward for the exact
-# observed remove-event device classes, so shutdown cannot requeue targets that
-# are already stopping.
-ACTION=="remove", SUBSYSTEM=="sound", KERNEL=="controlC*", ENV{SYSTEMD_WANTS}="", ENV{SYSTEMD_USER_WANTS}=""
-ACTION=="remove", ENV{ID_SMARTCARD_READER}=="?*", ENV{SYSTEMD_WANTS}="", ENV{SYSTEMD_USER_WANTS}=""
-ACTION=="remove", SUBSYSTEM=="misc", KERNEL=="rfkill", ENV{SYSTEMD_WANTS}=""
-ACTION=="remove", SUBSYSTEM=="bluetooth", ENV{SYSTEMD_WANTS}="", ENV{SYSTEMD_USER_WANTS}=""

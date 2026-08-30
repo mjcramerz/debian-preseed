@@ -109,6 +109,7 @@ sub refresh_outputs {
 
     my ($output_plans, $outputs_to_disable) = selection_plan(\@lines, @outputs);
     return 0 if !defined $output_plans || !@{$output_plans};
+    my %current_outputs = map { $_->{name} => $_ } parse_output_topology($state_before);
     my $restart_delay_us = topology_restart_delay_us(
         $output_plans->[0]->{name},
         @{$outputs_to_disable},
@@ -116,6 +117,7 @@ sub refresh_outputs {
 
     for my $output_plan (@{$output_plans}) {
         return 0 if !session_is_active();
+        next if output_plan_is_current($current_outputs{ $output_plan->{name} }, $output_plan);
         enable_output(
             $wlr_randr,
             $output_plan->{name},
@@ -125,6 +127,8 @@ sub refresh_outputs {
     }
     for my $output_name (@{$outputs_to_disable}) {
         return 0 if !session_is_active();
+        next if defined $current_outputs{$output_name}
+          && $current_outputs{$output_name}->{enabled} eq 'no';
         disable_output($wlr_randr, $output_name);
     }
 
@@ -938,6 +942,17 @@ sub apply_output_change {
     }
 
     return 'transient';
+}
+
+sub output_plan_is_current {
+    my ($current, $plan) = @_;
+    return 0 if !defined $current || !defined $plan;
+    return 0 if ($current->{enabled} // q{}) ne 'yes';
+    return 0 if !same_output_mode($current->{mode}, $plan->{mode});
+    return 0 if ($current->{position} // q{}) ne ($plan->{position} // q{});
+    my $wanted_scale = scale_for_output($plan->{name});
+    return 0 if !defined $current->{scale};
+    return abs($current->{scale} - $wanted_scale) <= 0.001 ? 1 : 0;
 }
 
 sub enable_output {

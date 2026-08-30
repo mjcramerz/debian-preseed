@@ -290,7 +290,6 @@ for path in \
   /etc/greetd/gtkgreet-power.css \
   /etc/polkit-1/rules.d/00-admin-identities.rules \
   /etc/polkit-1/rules.d/03-labwc-power.rules \
-  /etc/polkit-1/rules.d/04-fwupd-refresh.rules \
   /etc/polkit-1/rules.d/05-active-local-gate.rules \
   /etc/polkit-1/rules.d/10-greetd-power.rules \
   /etc/polkit-1/rules.d/10-pkexec.rules \

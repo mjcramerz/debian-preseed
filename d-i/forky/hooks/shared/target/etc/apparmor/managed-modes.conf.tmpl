@@ -103,13 +103,6 @@ __DESKTOP_APPARMOR_STATE__ if-executable steam /usr/bin/steam
 # Container and build tools follow the same selected desktop state.
 __DESKTOP_APPARMOR_STATE__ if-executable buildah /usr/bin/buildah
 __DESKTOP_APPARMOR_STATE__ if-executable linux-sandbox /usr/libexec/x86_64-linux-gnu/bazel/linux-sandbox
-__DESKTOP_APPARMOR_STATE__ if-executable lxc-attach /usr/bin/lxc-attach
-__DESKTOP_APPARMOR_STATE__ if-executable lxc-create /usr/bin/lxc-create
-__DESKTOP_APPARMOR_STATE__ if-executable lxc-destroy /usr/bin/lxc-destroy
-__DESKTOP_APPARMOR_STATE__ if-executable lxc-execute /usr/bin/lxc-execute
-__DESKTOP_APPARMOR_STATE__ if-executable lxc-stop /usr/bin/lxc-stop
-__DESKTOP_APPARMOR_STATE__ if-executable lxc-unshare /usr/bin/lxc-unshare
-__DESKTOP_APPARMOR_STATE__ if-executable lxc-usernsexec /usr/bin/lxc-usernsexec
 __DESKTOP_APPARMOR_STATE__ if-executable mmdebstrap /usr/bin/mmdebstrap
 __DESKTOP_APPARMOR_STATE__ if-executable rootlesskit /usr/bin/rootlesskit
 __DESKTOP_APPARMOR_STATE__ if-executable runc /usr/bin/runc
@@ -121,8 +114,6 @@ __DESKTOP_APPARMOR_STATE__ if-executable virtiofsd /usr/libexec/virtiofsd
 # desktop state.
 __DESKTOP_APPARMOR_STATE__ if-executable lsb_release /usr/bin/lsb_release
 __DESKTOP_APPARMOR_STATE__ if-executable nvidia_modprobe /usr/bin/nvidia-modprobe
-__DESKTOP_APPARMOR_STATE__ if-executable usr.bin.lxc-copy /usr/bin/lxc-copy
-__DESKTOP_APPARMOR_STATE__ if-executable usr.bin.lxc-start /usr/bin/lxc-start
 __DESKTOP_APPARMOR_STATE__ if-executable usr.bin.man /usr/bin/man
 __DESKTOP_APPARMOR_STATE__ if-executable usr.bin.passt /usr/bin/passt
 __DESKTOP_APPARMOR_STATE__ if-executable usr.bin.pasta /usr/bin/pasta

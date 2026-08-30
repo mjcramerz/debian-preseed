@@ -88,7 +88,6 @@ etc/login.defs|/etc/login.defs|0644
 etc/pam.d/polkit-1|/etc/pam.d/polkit-1|0644
 etc/pam.d/systemd-user|/etc/pam.d/systemd-user|0644
 etc/systemd/system/apt-daily-upgrade.service.d/50-unattended-upgrades-notify.conf|/etc/systemd/system/apt-daily-upgrade.service.d/50-unattended-upgrades-notify.conf|0644
-etc/systemd/system/fwupd-refresh.service.d/10-success-exit-status.conf|/etc/systemd/system/fwupd-refresh.service.d/10-success-exit-status.conf|0644
 etc/systemd/system/fwupd.service.d/20-managed-upower-ordering.conf|/etc/systemd/system/fwupd.service.d/20-managed-upower-ordering.conf|0644
 etc/systemd/system/unattended-upgrades.service.d/override.conf|/etc/systemd/system/unattended-upgrades.service.d/override.conf|0644
 usr/local/libexec/unattended-upgrades-notify|/usr/local/libexec/unattended-upgrades-notify|0755

@@ -208,6 +208,21 @@ else
   fail "journald retains bounded service logs, forwards them to rsyslog, and excludes kernel nftables traffic"
 fi
 
+managed_journal_units_ok=true
+for managed_journal_unit in \
+  "$shared_etc/systemd/system/crowdsec-firstboot.service" \
+  "$shared_etc/systemd/system/firstboot.service" \
+  "$shared_etc/systemd/system/managed-network.service" \
+  "$shared_etc/systemd/system/tailscale-managed-bootstrap.service"
+do
+  if ! grep -Fxq 'StandardOutput=journal' "$managed_journal_unit" ||
+     ! grep -Fxq 'StandardError=journal' "$managed_journal_unit" ||
+     grep -Fq 'journal+console' "$managed_journal_unit"; then
+    managed_journal_units_ok=false
+    break
+  fi
+done
+
 # shellcheck disable=SC2016
 if grep -Fxq 'module(load="imuxsock")' "$rsyslog_conf" &&
    grep -Fxq 'module(load="imklog")' "$rsyslog_conf" &&
@@ -224,10 +239,12 @@ if grep -Fxq 'module(load="imuxsock")' "$rsyslog_conf" &&
    ! grep -Eq '^[[:space:]]*module\(load="imtcp"' "$rsyslog_conf" &&
    ! grep -Eq '^[[:space:]]*input\(type="imudp"' "$rsyslog_conf" &&
    ! grep -Eq '^[[:space:]]*input\(type="imtcp"' "$rsyslog_conf" &&
-   ! grep -Fq '[mcramer]' "$rsyslog_conf"; then
-  pass "rsyslog keeps local inputs, private file modes, and general fallback logs"
+   ! grep -Fq ':omusrmsg:' "$rsyslog_conf" &&
+   ! grep -Fq '[mcramer]' "$rsyslog_conf" &&
+   [ "$managed_journal_units_ok" = true ]; then
+  pass "managed services and rsyslog retain journal and file logs without console or terminal broadcast"
 else
-  fail "rsyslog keeps local inputs, private file modes, and general fallback logs"
+  fail "managed services and rsyslog retain journal and file logs without console or terminal broadcast"
 fi
 
 numbered_routes_ok=true

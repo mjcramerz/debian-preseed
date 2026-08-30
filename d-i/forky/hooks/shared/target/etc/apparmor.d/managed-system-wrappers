@@ -358,26 +358,6 @@ profile managed-managed-syncthing-configure /usr/local/libexec/managed-syncthing
   include if exists <local/usr.local.libexec.managed-syncthing-configure>
 }
 
-profile managed-lxcfs-stop /usr/local/libexec/lxcfs-stop flags=(attach_disconnected) {
-  #include <abstractions/managed-wrapper-base>
-
-  capability sys_admin,
-  umount,
-
-  /usr/local/libexec/lxcfs-stop rix,
-  /usr/bin/{findmnt,fusermount3,sleep} rix,
-  /{,usr/}bin/fusermount rix,
-  /dev/fuse rw,
-  /etc/fstab r,
-  /etc/fuse.conf r,
-  @{PROC}/mounts r,
-  @{PROC}/@{pid}/mountinfo r,
-  /run/mount/utab rw,
-  /var/lib/lxcfs/ rw,
-
-  include if exists <local/usr.local.libexec.lxcfs-stop>
-}
-
 profile managed-rsyslog-managed-security-socket /usr/local/libexec/rsyslog-managed-security-socket flags=(attach_disconnected) {
   #include <abstractions/managed-wrapper-base>
 
@@ -558,18 +538,6 @@ profile managed-tailscale-managed-up /usr/local/libexec/tailscale-managed-up fla
   /var/run/tailscale/tailscaled.sock rw,
 
   include if exists <local/usr.local.libexec.tailscale-managed-up>
-}
-
-profile managed-tailscaled-cleanup-if-needed /usr/local/libexec/tailscaled-cleanup-if-needed flags=(attach_disconnected) {
-  #include <abstractions/managed-wrapper-base>
-
-  /usr/local/libexec/tailscaled-cleanup-if-needed rix,
-  /usr/bin/sleep rix,
-  /usr/sbin/tailscaled rPx -> usr.sbin.tailscaled,
-  /sys/class/net/ r,
-  /sys/class/net/** r,
-
-  include if exists <local/usr.local.libexec.tailscaled-cleanup-if-needed>
 }
 
 profile managed-timeshift-notify-shim /usr/local/libexec/timeshift-managed/notify-send flags=(attach_disconnected) {

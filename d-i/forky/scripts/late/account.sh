@@ -341,5 +341,4 @@ printf "account_access user=%s uid=%s gid=%s groups=%s\n" \
 
   install -d -m 0755 "/target${DIR_UDEV_CONF_D}" "/target${DIR_UDEV_RULES}"
   stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SHARED_TARGET etc/udev/udev.conf.d/90-hardening.conf)" "${FILE_UDEV_HARDENING_CONF}" 0644
-  stage_target_asset "$(installer_repo_join_var DIR_HOOKS_SHARED_TARGET etc/udev/rules.d/99-z-managed-device-removal.rules)" "${FILE_UDEV_DEVICE_REMOVAL_RULES}" 0644
 }

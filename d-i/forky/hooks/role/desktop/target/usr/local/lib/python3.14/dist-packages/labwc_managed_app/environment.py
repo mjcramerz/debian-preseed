@@ -73,16 +73,12 @@ CHATGPT_FORBIDDEN_AMBIENT_ENVIRONMENT = (
     "ENV",
     "LD_AUDIT",
     "LD_DEBUG",
-    "LIBVIRT_DEFAULT_URI",
     "LD_PRELOAD",
     "PYTHONHOME",
     "PYTHONINSPECT",
     "PYTHONPATH",
     "PYTHONSTARTUP",
     "SESSION_MANAGER",
-    "VAGRANT_DEFAULT_PROVIDER",
-    "VAGRANT_HOME",
-    "VIRSH_DEFAULT_CONNECT_URI",
     "WINDOWID",
     "WLR_XWAYLAND",
     "XAUTHORITY",
@@ -1216,12 +1212,6 @@ def build_environment(app_name: str, mode: str) -> dict[str, str]:
     if app_name == "chatgpt":
         env["SHELL"] = "/bin/zsh"
         env["PATH"] = chatgpt_sandbox_path(env["PATH"])
-        env.update(
-            {
-                "LIBVIRT_DEFAULT_URI": "qemu:///session",
-                "VIRSH_DEFAULT_CONNECT_URI": "qemu:///session",
-            }
-        )
     xdg_config_home = app.get("xdg_config_home")
     if xdg_config_home:
         env["XDG_CONFIG_HOME"] = resolve_home_relative_path(

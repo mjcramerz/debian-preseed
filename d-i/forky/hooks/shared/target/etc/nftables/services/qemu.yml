@@ -2,7 +2,7 @@ apiVersion: cybops.nftables/v1
 kind: NftablesServiceOverlay
 metadata:
   name: qemu
-  description: Managed libvirt and Incus guest-network overlay for qemu/libvirt desktop hosts.
+  description: Managed Incus guest-network overlay for direct QEMU/KVM and Incus desktop hosts.
   merge_priority: 55
   applies_to_profiles:
   - desktop
@@ -50,19 +50,6 @@ services:
       - 172.16.0.0/12
       - 192.168.0.0/16
       interfaces: __INSTALLER_NFTABLES_QEMU_ALLOW_INTERFACES__
-    sensitive: true
-    log: false
-  qemu_incus_api_ui:
-    enabled: true
-    direction: inbound
-    protocols:
-    - tcp
-    ports:
-    - __INSTALLER_QEMU_INCUS_HTTPS_PORT__
-    allow:
-      ipv4: __INSTALLER_NFTABLES_QEMU_HOST_ALLOW_IPV4__
-      ipv6: __INSTALLER_NFTABLES_QEMU_HOST_ALLOW_IPV6__
-      interfaces: __INSTALLER_NFTABLES_QEMU_HOST_ALLOW_INTERFACES__
     sensitive: true
     log: false
 forwarding:

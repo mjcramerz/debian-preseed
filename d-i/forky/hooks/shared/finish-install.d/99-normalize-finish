@@ -501,7 +501,7 @@ normalize_managed_helper_file_permissions() {
     /usr/local/libexec/managed-syncthing-configure \
     /usr/local/libexec/crowdsec-firstboot \
     /usr/local/libexec/secondboot-cleanup \
-    /usr/local/libexec/virt-host-managed
+    /usr/local/libexec/incus-host-managed
   do
     target_file=$(target_path_for "$rel_path" "$rel_path")
     [ -f "$target_file" ] || continue

@@ -808,7 +808,6 @@ desktop_polkit_managed_rule_files() {
   cat <<'EOF'
 00-admin-identities.rules
 03-labwc-power.rules
-04-fwupd-refresh.rules
 05-active-local-gate.rules
 10-pkexec.rules
 20-login1-power.rules
@@ -3772,6 +3771,8 @@ desktop_enable_target_services() {
   desktop_enable_unit_if_available rsyslog.service system
   desktop_enable_unit_if_available logrotate.timer system
   desktop_mask_unit_if_available systemd-journald-audit.socket system
+  desktop_mask_unit_if_available fwupd-refresh.service system
+  desktop_mask_unit_if_available fwupd-refresh.timer system
   desktop_disable_unit_if_available mpris-proxy.service user
   desktop_disable_unit_if_available waybar.service user
   desktop_disable_unit_if_available foot-server.service user

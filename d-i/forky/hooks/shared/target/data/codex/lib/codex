@@ -37,8 +37,8 @@ declare -a DEVOPS_READ_WRITE_HOME_DIRECTORIES=(
   Downloads
   Workspace
 )
-# Keep virtualization policy inspectable from Codex without exposing the
-# libvirt control socket or writable VM/Vagrant storage to the sandbox.
+# Keep managed host policy inspectable from Codex without exposing privileged
+# service sockets to the sandbox.
 declare -a DEVOPS_READ_ONLY_HOME_DIRECTORIES=(
   .cmake/packages
   .config/Code/User/snippets
@@ -60,7 +60,6 @@ declare -a DEVOPS_READ_ONLY_HOME_DIRECTORIES=(
   .config/sleek
   .config/task
   .config/vim
-  .config/virt-manager
   .config/yamllint
   .local/bin
   .local/lib
@@ -82,8 +81,6 @@ declare -a DEVOPS_READ_ONLY_HOME_FILES=(
   .config/containers/storage.conf
   .config/gh/config.yml
   .config/go/env
-  .config/libvirt/libvirt.conf
-  .config/libvirt/qemu.conf
   .config/mimeapps.list
   .config/obsidian/obsidian.json
   .config/starship.toml
@@ -103,13 +100,12 @@ declare -a DEVOPS_READ_ONLY_HOME_FILES=(
   .markdownlint.yml
   .profile
   .profile.d/71-devops-de.sh
-  .profile.d/72-virt-vagrant.sh
+  .profile.d/72-incus.sh
   .profile.d/75-firmware-workspace.sh
   .recoll/recoll.conf
   .ripgreprc
   .rustfmt.toml
   .shellcheckrc
-  .vagrant.d/Vagrantfile
   .vimrc
   .zlogin
   .zlogout
@@ -156,7 +152,6 @@ declare -a SANDBOX_UNSET_ENV_NAMES=(
   LD_DEBUG
   LD_LIBRARY_PATH
   LD_PRELOAD
-  LIBVIRT_DEFAULT_URI
   MACHTYPE
   OLDPWD
   OSTYPE
@@ -174,9 +169,6 @@ declare -a SANDBOX_UNSET_ENV_NAMES=(
   SSH_CONNECTION
   SSH_TTY
   SYSTEMD_EXEC_PID
-  VAGRANT_DEFAULT_PROVIDER
-  VAGRANT_HOME
-  VIRSH_DEFAULT_CONNECT_URI
   WAYLAND_DISPLAY
   WINDOWID
   WLR_XWAYLAND
@@ -507,7 +499,7 @@ codex_collect_devops_environment() {
 }
 
 codex_activate_devops_environment() {
-  local actual_user actual_uid profile_mode profile_owner profile_path profile_real
+  local actual_user actual_uid profile_owner profile_path profile_real
 
   actual_user=$(id -un) ||
     codex_die "cannot resolve the invoking account name"
@@ -523,7 +515,7 @@ codex_activate_devops_environment() {
   [[ "${LOGNAME:-${USER}}" == "${actual_user}" ]] ||
     codex_die "LOGNAME does not match the invoking account"
   codex_require_abs_path "HOME" "${HOME:-}"
-  codex_require_account_owned_directory "HOME" "${HOME}"
+  codex_require_account_owned_home_directory "HOME" "${HOME}"
 
   profile_path="${HOME}/.profile.d/71-devops-de.sh"
   codex_require_abs_path "managed DevOps profile" "${profile_path}"
@@ -535,16 +527,12 @@ codex_activate_devops_environment() {
     codex_die "managed DevOps profile must not traverse symlinks"
   profile_owner=$(stat -c '%u' -- "${profile_path}") ||
     codex_die "cannot inspect managed DevOps profile ownership"
-  profile_mode=$(stat -c '%a' -- "${profile_path}") ||
-    codex_die "cannot inspect managed DevOps profile mode"
-  [[ "${profile_owner}" == "${actual_uid}" && "${profile_mode}" == "600" ]] ||
-    codex_die "managed DevOps profile must be an invoking-account-owned mode-0600 regular file"
+  [[ "${profile_owner}" == "${actual_uid}" ]] ||
+    codex_die "managed DevOps profile must remain owned by the invoking account"
 
   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   XDG_CONFIG_HOME="${HOME}/.config"
   export PATH XDG_CONFIG_HOME
-  unset LIBVIRT_DEFAULT_URI VAGRANT_DEFAULT_PROVIDER VAGRANT_HOME
-
   # shellcheck source=/dev/null
   source "${profile_path}"
   declare -F devops_de_apply_environment >/dev/null ||
@@ -612,6 +600,15 @@ codex_require_account_owned_directory() {
   codex_require_account_owned_readable_directory "${label}" "${path}"
   [[ -w "${path}" ]] ||
     codex_die "${label} must remain writable by the invoking account"
+}
+
+codex_require_account_owned_home_directory() {
+  local label=${1:?label is required}
+  local path=${2:?path is required}
+
+  codex_require_account_owned_searchable_directory "${label}" "${path}"
+  [[ -r "${path}" && -w "${path}" ]] ||
+    codex_die "${label} must remain readable and writable by the invoking account"
 }
 
 codex_require_private_account_directory() {
@@ -706,13 +703,9 @@ codex_require_managed_work_areas() {
   done
 
   for home_directory in "${DEVOPS_READ_WRITE_HOME_DIRECTORIES[@]}"; do
-    codex_require_managed_directory \
+    codex_require_account_owned_home_directory \
       "managed ${home_directory} directory" \
-      "${HOME}/${home_directory}" \
-      "${account_uid}" \
-      "${USER}" \
-      755 \
-      1
+      "${HOME}/${home_directory}"
   done
 
   codex_require_managed_directory \
@@ -1050,7 +1043,7 @@ codex_append_ro_bind_if_present() {
 
 codex_append_home_ro_bind_if_present() {
   local relative_path=${1:?HOME-relative path is required}
-  local source_path destination_path source_real owner mode expected_owner
+  local source_path destination_path source_real owner expected_owner
   local parent_path relative_parent current_path component
   local -a components=()
 
@@ -1081,12 +1074,8 @@ codex_append_home_ro_bind_if_present() {
   expected_owner=$(id -u)
   owner=$(stat -c '%u' -- "${source_path}") ||
     codex_die "cannot inspect HOME-relative bind ownership: ${source_path}"
-  mode=$(stat -c '%a' -- "${source_path}") ||
-    codex_die "cannot inspect HOME-relative bind mode: ${source_path}"
-  [[ "${owner}" == "${expected_owner}" && "${mode}" =~ ^[0-7]{3,4}$ ]] ||
-    codex_die "HOME-relative bind source has unsafe ownership or mode: ${source_path}"
-  (( (8#${mode} & 00022) == 0 )) ||
-    codex_die "HOME-relative bind source must not be writable by group or other: ${source_path}"
+  [[ "${owner}" == "${expected_owner}" ]] ||
+    codex_die "HOME-relative bind source must remain owned by the invoking account: ${source_path}"
   [[ -r "${source_path}" ]] ||
     codex_die "HOME-relative bind source is not readable: ${source_path}"
   if [[ -d "${source_path}" && ! -x "${source_path}" ]]; then
@@ -1239,36 +1228,6 @@ codex_append_accelerator_device_binds() {
   done
 }
 
-codex_append_session_libvirt_socket_if_present() {
-  local uid=${1:?uid is required}
-  local runtime_dir="/run/user/${uid}"
-  local libvirt_dir="${runtime_dir}/libvirt"
-  local libvirt_socket="${libvirt_dir}/libvirt-sock"
-  local socket_owner
-
-  [[ "${uid}" =~ ^[0-9]+$ ]] ||
-    codex_die "managed libvirt socket uid is malformed"
-  if [[ ! -e "${libvirt_socket}" && ! -L "${libvirt_socket}" ]]; then
-    return 0
-  fi
-  codex_require_private_account_directory \
-    "current user runtime directory" \
-    "${runtime_dir}"
-  codex_require_private_account_directory \
-    "current user libvirt runtime directory" \
-    "${libvirt_dir}"
-  [[ -S "${libvirt_socket}" && ! -L "${libvirt_socket}" ]] ||
-    codex_die "current user libvirt socket is unavailable or indirect"
-  socket_owner=$(stat -c '%u' -- "${libvirt_socket}") ||
-    codex_die "cannot inspect current user libvirt socket ownership"
-  [[ "${socket_owner}" == "${uid}" ]] ||
-    codex_die "current user libvirt socket has an unexpected owner"
-
-  BWRAP_ARGS+=(
-    --dir "${libvirt_dir}"
-    --bind "${libvirt_socket}" "${libvirt_socket}"
-  )
-}
 
 codex_append_selective_home_access() {
   local home_directory home_file
@@ -1506,7 +1465,6 @@ codex_build_bwrap_args() {
 
   codex_append_selective_home_access
   codex_append_accelerator_device_binds
-  codex_append_session_libvirt_socket_if_present "${uid}"
 
   for env_name in "${SANDBOX_UNSET_ENV_NAMES[@]}"; do
     BWRAP_ARGS+=(--unsetenv "${env_name}")
@@ -1527,8 +1485,6 @@ codex_build_bwrap_args() {
     --setenv CODEX_LOG_DIR "${CODEX_LOG_ROOT}"
     --setenv CODEX_SKILLS "${CODEX_SKILLS_ROOT}"
     --setenv CODEX_SQLITE_HOME "${CODEX_SQLITE_ROOT}"
-    --setenv LIBVIRT_DEFAULT_URI qemu:///session
-    --setenv VIRSH_DEFAULT_CONNECT_URI qemu:///session
     --setenv XDG_RUNTIME_DIR "/run/user/${uid}"
     --setenv TMPDIR /tmp
     --setenv PATH "${synthetic_path}"

@@ -175,6 +175,7 @@ intel_i915_modprobe="$ROOT_DIR/d-i/forky/hooks/hardware/gpu/intel-uhd/target/etc
 intel_gpu_grub="$ROOT_DIR/d-i/forky/hooks/hardware/gpu/intel-uhd/target/etc/default/grub.d/85-gpu-intel.cfg"
 btrfs_family="$ROOT_DIR/d-i/forky/scripts/late/btrfs-family.sh"
 if ! grep -q 'enable_guc' "$intel_i915_modprobe" &&
+   ! grep -q 'enable_psr' "$intel_i915_modprobe" &&
    ! grep -q 'enable_guc' "$intel_gpu_grub" &&
    grep -q '^options thinkpad_acpi fan_control=1 brightness_enable=1$' "$thinkpad_acpi_modprobe" &&
    grep -q 'FILE_MODPROBE_THINKPAD_ACPI' "$btrfs_family" &&
@@ -182,9 +183,9 @@ if ! grep -q 'enable_guc' "$intel_i915_modprobe" &&
    grep -q 'thinkpad-acpi.conf' "$btrfs_family" &&
    grep -q 'thinkpad-acpi.conf' "$ROOT_DIR/d-i/forky/scripts/late/f2fs-family.sh" &&
    ! grep -q 'target_enable_vfio=true' "$btrfs_family"; then
-  pass "desktop Intel policy keeps ThinkPad fan control enabled without forcing GuC or bare-metal VFIO"
+  pass "desktop Intel policy keeps kernel-default GuC/PSR, ThinkPad fan control, and no bare-metal VFIO"
 else
-  fail "desktop Intel policy keeps ThinkPad fan control enabled without forcing GuC or bare-metal VFIO"
+  fail "desktop Intel policy keeps kernel-default GuC/PSR, ThinkPad fan control, and no bare-metal VFIO"
 fi
 
 f2fs_family="$ROOT_DIR/d-i/forky/scripts/late/f2fs-family.sh"
