@@ -1,0 +1,1 @@
+ACTION=="add", SUBSYSTEM=="ieee80211", RUN+="/usr/sbin/iw reg set SE"

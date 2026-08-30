@@ -1,0 +1,3 @@
+#!/bin/sh
+# Public output-control entrypoint.  The hotplug service uses the private worker.
+exec /usr/local/libexec/labwc-output-refresh "$@"

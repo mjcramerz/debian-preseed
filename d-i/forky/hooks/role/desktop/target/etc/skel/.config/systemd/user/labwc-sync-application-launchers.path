@@ -1,0 +1,15 @@
+[Unit]
+Description=Watch vendor autostart entries for managed launcher synchronization
+Requisite=labwc-session.target
+After=labwc-session.target
+PartOf=labwc-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+
+[Path]
+PathChanged=%h/.config/autostart
+Unit=labwc-sync-application-launchers.service
+
+[Install]
+WantedBy=labwc-session.target

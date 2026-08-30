@@ -1,0 +1,18 @@
+[Unit]
+Description=Periodic Fruux calendar synchronization
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+Requisite=labwc-session.target
+After=labwc-session.target
+PartOf=labwc-session.target
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+Unit=labwc-calendar-sync.service
+
+[Install]
+WantedBy=labwc-session.target

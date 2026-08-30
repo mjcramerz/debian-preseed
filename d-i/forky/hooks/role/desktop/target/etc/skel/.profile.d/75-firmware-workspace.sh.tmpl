@@ -1,0 +1,22 @@
+# Managed by unattended-installer.
+# Export firmware workspace defaults for the main desktop account.
+
+firmware_workspace_return() {
+  return 0 2>/dev/null || exit 0
+}
+
+case "${USER:-}" in
+  ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.@-]*)
+    firmware_workspace_return
+    ;;
+esac
+
+FIRMWARE_POOL_ROOT="${FIRMWARE_POOL_ROOT:-__INSTALLER_DIR_POOL_FIRMWARE__}"
+FIRMWARE_WORKSPACE_ROOT="${FIRMWARE_WORKSPACE_ROOT:-${FIRMWARE_POOL_ROOT}/${USER}}"
+FIRMWARE_CAPTURE_DIR="${FIRMWARE_CAPTURE_DIR:-${FIRMWARE_WORKSPACE_ROOT}/captures}"
+FIRMWARE_UNPACK_DIR="${FIRMWARE_UNPACK_DIR:-${FIRMWARE_WORKSPACE_ROOT}/unpack}"
+FIRMWARE_WORK_DIR="${FIRMWARE_WORK_DIR:-${FIRMWARE_WORKSPACE_ROOT}/work}"
+
+export FIRMWARE_POOL_ROOT FIRMWARE_WORKSPACE_ROOT FIRMWARE_CAPTURE_DIR FIRMWARE_UNPACK_DIR FIRMWARE_WORK_DIR
+
+unset -f firmware_workspace_return

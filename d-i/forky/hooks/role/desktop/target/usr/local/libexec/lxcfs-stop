@@ -1,0 +1,72 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+mountpoint=/var/lib/lxcfs
+
+fatal() {
+  printf 'fatal: lxcfs stop: %s\n' "$*" >&2
+  exit 1
+}
+
+[ -d "$mountpoint" ] && [ ! -L "$mountpoint" ] || exit 0
+[ -x /usr/bin/findmnt ] || fatal "findmnt is unavailable"
+
+lxcfs_mount_type() {
+  /usr/bin/findmnt \
+    --noheadings \
+    --raw \
+    --mountpoint "$mountpoint" \
+    --output FSTYPE 2>/dev/null ||
+    true
+}
+
+mount_type=$(lxcfs_mount_type)
+[ -n "$mount_type" ] || exit 0
+[ "$mount_type" = fuse.lxcfs ] ||
+  fatal "refusing to unmount unexpected filesystem type ${mount_type} at ${mountpoint}"
+
+if [ -x /usr/bin/fusermount3 ]; then
+  fusermount_bin=/usr/bin/fusermount3
+elif [ -x /bin/fusermount ]; then
+  fusermount_bin=/bin/fusermount
+else
+  fatal "no FUSE unmount helper is available"
+fi
+
+attempt=1
+while [ "$attempt" -le 3 ]; do
+  if "$fusermount_bin" -u "$mountpoint" 2>/dev/null; then
+    exit 0
+  fi
+  mount_type=$(lxcfs_mount_type)
+  [ -n "$mount_type" ] || exit 0
+  [ "$mount_type" = fuse.lxcfs ] ||
+    fatal "filesystem type changed while unmounting ${mountpoint}: ${mount_type}"
+  [ "$attempt" -lt 3 ] || break
+  /usr/bin/sleep 1
+  attempt=$((attempt + 1))
+done
+
+# lxcfs can still have transient FUSE references while its daemon is exiting.
+# Detach the already-validated mount after bounded normal retries so shutdown
+# does not fail or wait for the kernel to release every last reference.
+lazy_detach_succeeded=false
+if "$fusermount_bin" -uz "$mountpoint" 2>/dev/null; then
+  lazy_detach_succeeded=true
+fi
+mount_type=$(lxcfs_mount_type)
+[ -n "$mount_type" ] ||
+  exit 0
+[ "$mount_type" = fuse.lxcfs ] ||
+  fatal "filesystem type changed after lazy unmount at ${mountpoint}: ${mount_type}"
+[ "$lazy_detach_succeeded" = true ] ||
+  fatal "failed to lazy-detach ${mountpoint} after bounded normal unmount attempts"
+
+# A lazy-detached FUSE mount can remain visible until outstanding kernel
+# references drain. The mount type was validated before and after the bounded
+# detach request, so do not turn expected asynchronous cleanup into a failed
+# ExecStopPost= result during shutdown.
+exit 0

@@ -1,0 +1,33 @@
+[Unit]
+Description=Managed Android Debug Bridge server for the Labwc session
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+ConditionPathExists=/usr/local/bin/adb
+Requisite=labwc-session.target
+PartOf=labwc-session.target
+After=labwc-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=%h
+Environment=XDG_RUNTIME_DIR=%t
+SyslogIdentifier=labwc-adb
+StandardOutput=journal
+StandardError=journal
+ExecStart=/usr/local/bin/labwc-adb-action --service start
+ExecStop=/usr/local/bin/labwc-adb-action --service stop
+TimeoutStartSec=75s
+TimeoutStopSec=20s
+PrivateTmp=yes
+ProtectSystem=full
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+
+# The Google adb client uses the existing managed AppArmor PUx transition to
+# launch its per-user daemon. NoNewPrivileges would block that transition.

@@ -1,0 +1,37 @@
+[Unit]
+Description=Mute all microphones for the Labwc session
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+Requisite=labwc-session.target
+PartOf=labwc-session.target
+Wants=pipewire.service pipewire-pulse.service wireplumber.service
+After=labwc-session.target pipewire.service pipewire-pulse.service wireplumber.service
+# A microphone can appear after the PipeWire and WirePlumber units have
+# reported ready. The helper polls for up to one minute without blocking or
+# terminating the compositor login when capture hardware is absent or delayed.
+StartLimitIntervalSec=5min
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+SyslogIdentifier=whisper-record-toggle
+StandardOutput=journal
+StandardError=journal
+ExecCondition=/bin/sh -eu -c '[ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ] && /usr/bin/systemctl --user --quiet is-active labwc-session.target'
+ExecStart=/usr/local/libexec/labwc-mute-default-microphone
+Restart=on-failure
+RestartSec=1s
+TimeoutStartSec=75s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=labwc-session.target

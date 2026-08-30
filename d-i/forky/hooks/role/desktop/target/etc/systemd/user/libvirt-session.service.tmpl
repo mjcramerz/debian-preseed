@@ -1,0 +1,37 @@
+[Unit]
+Description=On-demand libvirt daemon for the desktop user's QEMU session
+Documentation=man:libvirtd(8)
+ConditionUser=__INSTALLER_ACCOUNT_USERNAME__
+Requisite=labwc-session.target
+Requires=managed-libvirt-runtime.service managed-virtlogd.service managed-virtlockd.service
+After=labwc-session.target managed-libvirt-runtime.service managed-virtlogd.service managed-virtlockd.service
+PartOf=labwc-session.target
+
+[Service]
+Type=notify
+Environment=LIBVIRT_AUTOSTART=0
+Environment=XDG_CONFIG_HOME=%h/.config
+Environment=XDG_CACHE_HOME=/var/log/managed/libvirt/__INSTALLER_ACCOUNT_USERNAME__/cache
+Environment=XDG_RUNTIME_DIR=%t
+ExecStart=/usr/sbin/libvirtd --timeout 30
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=libvirtd
+PrivateTmp=yes
+ProtectSystem=full
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native

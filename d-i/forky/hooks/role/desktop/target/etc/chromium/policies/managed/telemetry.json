@@ -1,0 +1,13 @@
+{
+  "MetricsReportingEnabled": false,
+  "UserFeedbackAllowed": false,
+  "SafeBrowsingProtectionLevel": 1,
+  "SafeBrowsingExtendedReportingEnabled": false,
+  "UrlKeyedAnonymizedDataCollectionEnabled": false,
+  "SearchSuggestEnabled": false,
+  "SpellCheckServiceEnabled": false,
+  "AlternateErrorPagesEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "PasswordManagerEnabled": false
+}

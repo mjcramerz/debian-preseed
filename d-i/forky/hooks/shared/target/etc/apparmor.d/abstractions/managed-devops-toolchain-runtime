@@ -1,0 +1,55 @@
+# Managed by unattended-installer.
+#
+# Shared runtime permissions for downloaded and compiled developer tools. This
+# abstraction deliberately excludes Bubblewrap namespace-construction
+# privileges and Codex-owned state; callers add those permissions explicitly.
+
+#include <abstractions/managed-wrapper-desktop>
+include if exists <abstractions/nameservice-strict>
+include if exists <abstractions/ssl_certs>
+include if exists <abstractions/user-tmp>
+
+unix,
+network inet stream,
+network inet6 stream,
+network inet dgram,
+network inet6 dgram,
+network netlink dgram,
+network netlink raw,
+
+/ r,
+/home/ r,
+/{bin,sbin}/** rix,
+/usr/** mrix,
+/opt/** mrix,
+/etc/ r,
+/etc/** r,
+/dev/ r,
+/dev/** rw,
+/proc/ r,
+/proc/** r,
+/sys/ r,
+/sys/** r,
+/usr/local/lib/bazelisk/ rw,
+/usr/local/lib/bazelisk/** rwklm,
+/usr/local/lib/bazelisk/** rix,
+/usr/local/lib/rustup/ rw,
+/usr/local/lib/rustup/** rwklm,
+/usr/local/lib/rustup/** rix,
+/usr/local/lib/node-{22,24,26}/ rw,
+/usr/local/lib/node-{22,24,26}/** rwklm,
+/usr/local/lib/node-{22,24,26}/** rix,
+owner /run/user/[0-9]*/ rw,
+owner /run/user/[0-9]*/** rwkl,
+owner @{HOME}/ r,
+owner @{HOME}/** rwklm,
+owner @{HOME}/** rix,
+/pool/ rw,
+/pool/** rwklm,
+/pool/** rix,
+/tmp/ rw,
+/tmp/** rwklm,
+/tmp/** rix,
+/var/tmp/ rw,
+/var/tmp/** rwklm,
+/var/tmp/** rix,

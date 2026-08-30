@@ -1,0 +1,10 @@
+{
+  "HardwareAccelerationModeEnabled": true,
+  "EfficiencyModeEnabled": true,
+  "EfficiencyMode": 4,
+  "SleepingTabsEnabled": true,
+  "SleepingTabsTimeout": 1800,
+  "AutoDiscardSleepingTabsEnabled": true,
+  "SleepingTabsBlockedForUrls": [],
+  "IntensiveWakeUpThrottlingEnabled": true
+}

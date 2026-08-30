@@ -1,0 +1,1097 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+
+use Fcntl qw(:flock);
+use File::Path qw(make_path);
+use Time::HiRes qw(usleep);
+
+my %defaults = load_defaults('/etc/default/labwc-desktop');
+apply_env_overrides(
+    \%defaults,
+    qw(
+      LABWC_ENABLE_WAYBAR
+      LABWC_OUTPUT_EXTERNAL_PREFERRED_HEIGHT
+      LABWC_OUTPUT_EXTERNAL_PREFERRED_REFRESH_HZ
+      LABWC_OUTPUT_EXTERNAL_PREFERRED_WIDTH
+      LABWC_OUTPUT_EXTERNAL_SCALE
+      LABWC_OUTPUT_FALLBACK_REFRESH_HZ
+      LABWC_OUTPUT_INTERNAL_PREFERRED_HEIGHT
+      LABWC_OUTPUT_INTERNAL_PREFERRED_REFRESH_HZ
+      LABWC_OUTPUT_INTERNAL_PREFERRED_WIDTH
+      LABWC_OUTPUT_INTERNAL_PREFIXES
+      LABWC_OUTPUT_INTERNAL_REFRESH_DELAY_SECONDS
+      LABWC_OUTPUT_INTERNAL_SCALE
+      LABWC_OUTPUT_POLICY
+      LABWC_OUTPUT_SCALE
+    )
+);
+
+my $requested_mode = $ARGV[0] // q{};
+my %supported_modes = map { $_ => 1 } (
+    q{},
+    '--dpms-off',
+    '--dpms-on',
+    '--idle-topology-active',
+    '--restore-idle-topology',
+);
+exit 64 if !exists $supported_modes{$requested_mode};
+if (!session_is_active()) {
+    exit($requested_mode eq '--idle-topology-active' ? 1 : 0);
+}
+
+my $refresh_result = with_refresh_lock(
+    sub {
+        return refresh_outputs($requested_mode);
+    }
+);
+
+if ($requested_mode eq '--idle-topology-active') {
+    exit($refresh_result ? 0 : 1);
+}
+
+if ($requested_mode eq '--restore-idle-topology') {
+    exit 1 if !$refresh_result;
+    refresh_output_chrome(300_000);
+    exit 0;
+}
+
+refresh_output_chrome($refresh_result) if $refresh_result;
+exit 0;
+
+sub refresh_outputs {
+    my ($mode) = @_;
+    return 0 if !session_is_active();
+
+    if ($mode eq '--idle-topology-active') {
+        return idle_topology_active() ? 1 : 0;
+    }
+
+    if ($mode eq '--restore-idle-topology') {
+        my $wlr_randr = find_command('wlr-randr');
+        return 0 if !defined $wlr_randr;
+        return restore_idle_topology($wlr_randr);
+    }
+
+    if ($mode eq '--dpms-off') {
+        my $wlr_randr = find_command('wlr-randr');
+        capture_idle_topology($wlr_randr) if defined $wlr_randr;
+        run_optional('wlopm', '--off', '*');
+        return 0;
+    }
+
+    if ($mode eq '--dpms-on') {
+        run_optional('wlopm', '--on', '*');
+        my $wlr_randr = find_command('wlr-randr');
+        if (defined $wlr_randr && idle_topology_active()) {
+            request_idle_topology_restore();
+            if (restore_idle_topology($wlr_randr)) {
+                return 300_000;
+            }
+        }
+        refresh_output_chrome_after_dpms();
+        return 0;
+    }
+
+    my $wlr_randr = find_command('wlr-randr');
+    return 0 if !defined $wlr_randr;
+
+    run_optional('wlopm', '--on', '*');
+
+    my $state_before = capture_command($wlr_randr);
+    return 0 if $state_before eq q{};
+    my $previous_topology = load_saved_topology();
+
+    my @lines = split /\n/, $state_before;
+    my @outputs = connected_outputs(@lines);
+    return 0 if !@outputs;
+    return 0 if !session_is_active();
+
+    my ($output_plans, $outputs_to_disable) = selection_plan(\@lines, @outputs);
+    return 0 if !defined $output_plans || !@{$output_plans};
+    my $restart_delay_us = topology_restart_delay_us(
+        $output_plans->[0]->{name},
+        @{$outputs_to_disable},
+    );
+
+    for my $output_plan (@{$output_plans}) {
+        return 0 if !session_is_active();
+        enable_output(
+            $wlr_randr,
+            $output_plan->{name},
+            $output_plan->{mode},
+            $output_plan->{position},
+        ) or return 0;
+    }
+    for my $output_name (@{$outputs_to_disable}) {
+        return 0 if !session_is_active();
+        disable_output($wlr_randr, $output_name);
+    }
+
+    return 0 if !session_is_active();
+    usleep(250_000);
+    return 0 if !session_is_active();
+    my $state_after = capture_command($wlr_randr);
+    save_topology($state_after);
+
+    return topology_changed($state_before, $state_after)
+      || topology_changed($previous_topology, $state_after)
+      ? $restart_delay_us
+      : 0;
+}
+
+sub selection_plan {
+    my ($state_lines, @outputs) = @_;
+    my (@internal_outputs, @external_outputs, @hdmi_outputs);
+
+    for my $output_name (@outputs) {
+        if (is_internal_output($output_name)) {
+            push @internal_outputs, $output_name;
+        } else {
+            push @external_outputs, $output_name;
+            push @hdmi_outputs, $output_name if is_hdmi_output($output_name);
+        }
+    }
+
+    my @selected_outputs;
+    my $output_policy = $defaults{LABWC_OUTPUT_POLICY} // 'auto';
+    if (@hdmi_outputs) {
+        push @selected_outputs, $hdmi_outputs[0];
+    } elsif ($output_policy eq 'auto') {
+        push @selected_outputs, $internal_outputs[0] if @internal_outputs;
+        push @selected_outputs, @external_outputs;
+    } else {
+        my $selected_output = $external_outputs[0] // $internal_outputs[0];
+        push @selected_outputs, $selected_output if defined $selected_output;
+    }
+    return if !@selected_outputs;
+
+    my @output_plans;
+    my $position_x = 0;
+    for my $selected_output (@selected_outputs) {
+        my $selected_mode = mode_for_output($state_lines, $selected_output);
+        push @output_plans, {
+            mode     => $selected_mode,
+            name     => $selected_output,
+            position => "${position_x},0",
+        };
+        $position_x += logical_width_for_output($selected_mode, $selected_output);
+    }
+
+    my %selected = map { $_ => 1 } @selected_outputs;
+    my @outputs_to_disable = grep { !$selected{$_} } @outputs;
+    return (\@output_plans, \@outputs_to_disable);
+}
+
+sub load_defaults {
+    my ($path) = @_;
+    my %values;
+
+    return %values if !-r $path;
+    open my $fh, '<', $path or return %values;
+    while (my $line = <$fh>) {
+        chomp $line;
+        $line =~ s/^\s+//;
+        $line =~ s/\s+$//;
+        next if $line eq q{} || $line =~ /^#/;
+        next if $line !~ /^([A-Z0-9_]+)=(.*)$/;
+
+        my ($key, $value) = ($1, $2);
+        $value =~ s/^\s+//;
+        $value =~ s/\s+$//;
+        if ($value =~ /\A'(.*)'\z/s || $value =~ /\A"(.*)"\z/s) {
+            $value = $1;
+        }
+        $values{$key} = $value;
+    }
+    close $fh;
+    return %values;
+}
+
+sub apply_env_overrides {
+    my ($values, @keys) = @_;
+
+    for my $key (@keys) {
+        next if !exists $ENV{$key};
+        $values->{$key} = $ENV{$key};
+    }
+    return;
+}
+
+sub with_refresh_lock {
+    my ($callback) = @_;
+    my $state_dir = session_state_dir();
+    return $callback->() if !defined $state_dir;
+
+    my $lock_path = "${state_dir}/output-refresh.lock";
+    open my $lock_fh, '>>', $lock_path or return $callback->();
+    flock($lock_fh, LOCK_EX) or return $callback->();
+    my $result = $callback->();
+    close $lock_fh;
+    return $result;
+}
+
+sub session_state_dir {
+    my $base = $ENV{XDG_STATE_HOME} // q{};
+    if ($base eq q{}) {
+        my $home = $ENV{HOME} // q{};
+        $base = $home ne q{} ? "${home}/.local/state" : "/tmp/labwc-$<";
+    }
+
+    my $dir = "${base}/labwc";
+    eval {
+        make_path($dir, { mode => 0700 }) if !-d $dir;
+        1;
+    } or return undef;
+    return $dir;
+}
+
+sub topology_state_dir {
+    my $base = $ENV{XDG_RUNTIME_DIR} // q{};
+    if ($base eq q{}) {
+        return session_state_dir();
+    }
+
+    my $dir = "${base}/labwc";
+    eval {
+        make_path($dir, { mode => 0700 }) if !-d $dir;
+        1;
+    } or return undef;
+    return $dir;
+}
+
+sub topology_state_path {
+    my $dir = topology_state_dir();
+    return undef if !defined $dir;
+    return "${dir}/output-topology.state";
+}
+
+sub load_saved_topology {
+    my $path = topology_state_path();
+    return q{} if !defined $path || !-r $path;
+
+    open my $fh, '<', $path or return q{};
+    local $/ = undef;
+    my $state = <$fh> // q{};
+    close $fh;
+    return $state;
+}
+
+sub save_topology {
+    my ($state) = @_;
+    return if !defined $state || $state eq q{};
+
+    my $path = topology_state_path();
+    return if !defined $path;
+
+    open my $fh, '>', $path or return;
+    print {$fh} $state;
+    close $fh;
+    return;
+}
+
+sub idle_topology_state_path {
+    my $dir = topology_state_dir();
+    return undef if !defined $dir;
+    return "${dir}/output-idle-topology.state";
+}
+
+sub idle_topology_restore_request_path {
+    my $dir = topology_state_dir();
+    return undef if !defined $dir;
+    return "${dir}/output-idle-topology.restore";
+}
+
+sub idle_topology_active {
+    my $path = idle_topology_state_path();
+    return defined $path && -s $path ? 1 : 0;
+}
+
+sub idle_topology_restore_requested {
+    my $path = idle_topology_restore_request_path();
+    return defined $path && -e $path ? 1 : 0;
+}
+
+sub request_idle_topology_restore {
+    return if !idle_topology_active();
+
+    my $path = idle_topology_restore_request_path();
+    return if !defined $path;
+    open my $fh, '>', $path or return;
+    chmod 0600, $path;
+    print {$fh} "restore\n";
+    close $fh;
+    return;
+}
+
+sub clear_idle_topology {
+    for my $path (idle_topology_state_path(), idle_topology_restore_request_path()) {
+        unlink $path if defined $path && -e $path;
+    }
+    return;
+}
+
+sub capture_idle_topology {
+    my ($wlr_randr) = @_;
+    clear_idle_topology();
+
+    my $state = capture_command($wlr_randr);
+    return if $state eq q{};
+
+    my @outputs = parse_output_topology($state);
+    return if !@outputs || !grep { $_->{enabled} eq 'yes' } @outputs;
+    return if grep { !output_geometry_complete($_) } @outputs;
+
+    my $path = idle_topology_state_path();
+    return if !defined $path;
+    my $temporary_path = "${path}.$$.tmp";
+    open my $fh, '>', $temporary_path or return;
+    chmod 0600, $temporary_path;
+    print {$fh} "v1\n";
+    for my $output (sort { $a->{name} cmp $b->{name} } @outputs) {
+        print {$fh} join(
+            "\t",
+            $output->{name},
+            $output->{enabled},
+            $output->{mode} // '-',
+            $output->{scale} // '-',
+            $output->{position} // '-',
+            $output->{transform} // '-',
+            $output->{logical_size} // '-',
+        ), "\n";
+    }
+    close $fh or do {
+        unlink $temporary_path;
+        return;
+    };
+    rename $temporary_path, $path or unlink $temporary_path;
+    return;
+}
+
+sub load_idle_topology {
+    my $path = idle_topology_state_path();
+    return () if !defined $path || !-r $path || -s $path > 65_536;
+
+    open my $fh, '<', $path or return ();
+    my $header = <$fh> // q{};
+    chomp $header;
+    if ($header ne 'v1') {
+        close $fh;
+        return ();
+    }
+
+    my @outputs;
+    my %seen;
+    while (my $line = <$fh>) {
+        chomp $line;
+        my @fields = split /\t/, $line, -1;
+        if (@fields != 7) {
+            close $fh;
+            return ();
+        }
+
+        my ($name, $enabled, $mode, $scale, $position, $transform, $logical_size) = @fields;
+        if (!output_name_safe($name) || $seen{$name}++ || $enabled !~ /\A(?:yes|no)\z/) {
+            close $fh;
+            return ();
+        }
+
+        my $output = {
+            enabled      => $enabled,
+            logical_size => $logical_size,
+            mode         => $mode,
+            name         => $name,
+            position     => $position,
+            scale        => $scale,
+            transform    => $transform,
+        };
+        if (!output_geometry_complete($output)) {
+            close $fh;
+            return ();
+        }
+        push @outputs, $output;
+    }
+    close $fh;
+    return @outputs;
+}
+
+sub restore_idle_topology {
+    my ($wlr_randr) = @_;
+    return 0 if !idle_topology_restore_requested();
+
+    my @saved_outputs = load_idle_topology();
+    return 0 if !@saved_outputs;
+    my @enabled_outputs = grep { $_->{enabled} eq 'yes' } @saved_outputs;
+    return 0 if !@enabled_outputs;
+
+    # A DPMS wake may make output objects visible before Labwc has committed
+    # their final geometry. Reapply the captured topology only after the
+    # expected objects exist, then wait for the compositor to report the exact
+    # mode, scale, transform, and logical size before refreshing session chrome.
+    return 0 if !wait_for_idle_outputs($wlr_randr, \@enabled_outputs);
+    return 0 if !apply_idle_topology($wlr_randr, \@enabled_outputs);
+    return 0 if !wait_for_idle_topology_commit($wlr_randr, \@enabled_outputs);
+
+    save_topology(capture_command($wlr_randr));
+    clear_idle_topology();
+    return 1;
+}
+
+sub wait_for_idle_outputs {
+    my ($wlr_randr, $expected_outputs) = @_;
+
+    for (1 .. 30) {
+        my %current_outputs = map {
+            $_->{name} => $_
+        } parse_output_topology(capture_command($wlr_randr));
+        return 1
+          if !grep { !exists $current_outputs{$_->{name}} } @{$expected_outputs};
+        usleep(100_000);
+    }
+
+    return 0;
+}
+
+sub apply_idle_topology {
+    my ($wlr_randr, $expected_outputs) = @_;
+
+    for my $output (@{$expected_outputs}) {
+        return 0 if !session_is_active();
+        my $result = apply_output_change(
+            $wlr_randr,
+            $output->{name},
+            '--output', $output->{name},
+            '--on',
+            '--mode', $output->{mode},
+            '--scale', $output->{scale},
+            '--transform', $output->{transform},
+            '--pos', $output->{position},
+        );
+        return 0 if $result ne 'applied';
+    }
+
+    return 1;
+}
+
+sub wait_for_idle_topology_commit {
+    my ($wlr_randr, $expected_outputs) = @_;
+
+    for (1 .. 10) {
+        my %current_outputs = map {
+            $_->{name} => $_
+        } parse_output_topology(capture_command($wlr_randr));
+        return 1 if idle_topology_matches(\%current_outputs, $expected_outputs);
+        usleep(100_000);
+    }
+
+    return 0;
+}
+
+sub idle_topology_matches {
+    my ($current_outputs, $expected_outputs) = @_;
+
+    for my $expected (@{$expected_outputs}) {
+        my $current = $current_outputs->{ $expected->{name} };
+        return 0 if !defined $current;
+        return 0 if !same_idle_output_geometry($current, $expected);
+    }
+
+    return 1;
+}
+
+sub same_idle_output_geometry {
+    my ($current, $expected) = @_;
+    return 0 if ($current->{enabled} // q{}) ne 'yes';
+    return 0 if !same_output_mode($current->{mode}, $expected->{mode});
+    return 0 if !defined($current->{scale}) || !defined($expected->{scale});
+    return 0 if abs($current->{scale} - $expected->{scale}) > 0.001;
+    return 0 if ($current->{transform} // q{}) ne ($expected->{transform} // q{});
+    return 0 if ($current->{position} // q{}) ne ($expected->{position} // q{});
+    return 0
+      if ($current->{logical_size} // q{}) ne ($expected->{logical_size} // q{});
+    return 1;
+}
+
+sub same_output_mode {
+    my ($left, $right) = @_;
+    return 0 if !valid_output_mode($left) || !valid_output_mode($right);
+
+    my ($left_width, $left_height, $left_hz) =
+      $left =~ /\A(\d+)x(\d+)\@([0-9]+(?:\.[0-9]+)?)Hz\z/;
+    my ($right_width, $right_height, $right_hz) =
+      $right =~ /\A(\d+)x(\d+)\@([0-9]+(?:\.[0-9]+)?)Hz\z/;
+
+    return $left_width == $right_width
+      && $left_height == $right_height
+      && abs($left_hz - $right_hz) < 0.01;
+}
+
+sub parse_output_topology {
+    my ($state) = @_;
+    return () if !defined $state || $state eq q{};
+
+    my @outputs;
+    my $current;
+    my $finish_current = sub {
+        return if !defined $current;
+        if (
+            $current->{enabled} eq 'yes'
+            && !valid_logical_size($current->{logical_size})
+        ) {
+            $current->{logical_size} = logical_size_for_output($current);
+        }
+        if (
+            output_name_safe($current->{name})
+            && (
+                $current->{enabled} eq 'no'
+                || output_geometry_complete($current)
+            )
+        ) {
+            push @outputs, $current if output_geometry_complete($current);
+        }
+        return;
+    };
+
+    for my $line (split /\n/, $state) {
+        if ($line =~ /\A([A-Za-z0-9._-]+)\b/) {
+            $finish_current->();
+            $current = {
+                enabled      => 'no',
+                logical_size => undef,
+                mode         => undef,
+                name         => $1,
+                position     => undef,
+                scale        => undef,
+                transform    => undef,
+            };
+            next;
+        }
+        next if !defined $current;
+
+        if ($line =~ /^\s+Enabled:\s+(yes|no)\s*$/i) {
+            $current->{enabled} = lc $1;
+        } elsif ($line =~ /^\s+Position:\s*(-?\d+),\s*(-?\d+)\s*$/) {
+            $current->{position} = "${1},${2}";
+        } elsif ($line =~ /^\s+Scale:\s+([0-9]+(?:\.[0-9]+)?)\s*$/) {
+            $current->{scale} = $1;
+        } elsif ($line =~ /^\s+Transform:\s+([A-Za-z0-9-]+)\s*$/) {
+            $current->{transform} = $1;
+        } elsif ($line =~ /^\s+Logical size:\s+(\d+)x(\d+)\s*$/) {
+            $current->{logical_size} = "${1}x${2}";
+        } elsif ($line =~ /^\s+(\d{1,5})x(\d{1,5})\s+px,\s+([0-9]+(?:\.[0-9]+)?)\s+Hz(?:\s+\(([^)]*)\))?/) {
+            my ($width, $height, $refresh_hz, $flags) = ($1, $2, $3, $4);
+            if (defined $flags && $flags =~ /\bcurrent\b/) {
+                $current->{mode} = sprintf('%sx%s@%sHz', $width, $height, $refresh_hz);
+            }
+        } elsif ($line =~ /^\s+Current mode:\s+(\d{1,5}x\d{1,5}\@[0-9]+(?:\.[0-9]+)?Hz)\s*$/) {
+            $current->{mode} = $1;
+        }
+    }
+    $finish_current->();
+    return @outputs;
+}
+
+sub output_geometry_complete {
+    my ($output) = @_;
+    return 0 if !defined $output || !defined $output->{enabled};
+    return 1 if $output->{enabled} eq 'no';
+    return 0 if $output->{enabled} ne 'yes';
+    return 0 if !valid_output_mode($output->{mode});
+    return 0 if !valid_output_scale($output->{scale});
+    return 0 if !valid_output_position($output->{position});
+    return 0 if !valid_output_transform($output->{transform});
+    return 0 if !valid_logical_size($output->{logical_size});
+    return 1;
+}
+
+sub valid_output_mode {
+    my ($mode) = @_;
+    return defined $mode
+      && $mode =~ /\A\d{1,5}x\d{1,5}\@[0-9]+(?:\.[0-9]+)?Hz\z/;
+}
+
+sub valid_output_scale {
+    my ($scale) = @_;
+    return 0 if !defined $scale || $scale !~ /\A\d+(?:\.\d+)?\z/;
+    return $scale > 0 && $scale <= 8 ? 1 : 0;
+}
+
+sub valid_output_position {
+    my ($position) = @_;
+    return defined $position
+      && $position =~ /\A-?\d+,-?\d+\z/;
+}
+
+sub valid_output_transform {
+    my ($transform) = @_;
+    return defined $transform
+      && $transform =~ /\A(?:normal|90|180|270|flipped|flipped-(?:90|180|270))\z/;
+}
+
+sub valid_logical_size {
+    my ($logical_size) = @_;
+    return defined $logical_size
+      && $logical_size =~ /\A\d{1,5}x\d{1,5}\z/;
+}
+
+sub logical_size_for_output {
+    my ($output) = @_;
+    return '-' if !defined $output || !valid_output_mode($output->{mode});
+    return '-' if !valid_output_scale($output->{scale});
+
+    my ($width, $height) = $output->{mode} =~ /\A(\d+)x(\d+)\@/;
+    if (($output->{transform} // q{}) =~ /\A(?:90|270|flipped-(?:90|270))\z/) {
+        ($width, $height) = ($height, $width);
+    }
+    return join 'x',
+      int(($width / $output->{scale}) + 0.5),
+      int(($height / $output->{scale}) + 0.5);
+}
+
+sub find_command {
+    my ($command_name) = @_;
+    for my $dir (split /:/, ($ENV{PATH} // '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin')) {
+        next if $dir eq q{};
+        my $candidate = "$dir/$command_name";
+        return $candidate if -x $candidate;
+    }
+    return undef;
+}
+
+sub capture_command {
+    my ($command, @args) = @_;
+    my $pid = open my $fh, '-|';
+    return q{} if !defined $pid;
+    if ($pid == 0) {
+        open STDERR, '>', '/dev/null' or exit 1;
+        exec {$command} $command, @args;
+        exit 1;
+    }
+
+    local $/ = undef;
+    my $output = <$fh> // q{};
+    close $fh;
+    return q{} if $? != 0;
+    return $output;
+}
+
+sub run_command_capture_stderr {
+    my ($command, @args) = @_;
+    pipe my $stderr_reader, my $stderr_writer or return (0, q{});
+
+    my $pid = fork;
+    if (!defined $pid) {
+        close $stderr_reader;
+        close $stderr_writer;
+        return (0, q{});
+    }
+    if ($pid == 0) {
+        close $stderr_reader;
+        open STDOUT, '>', '/dev/null' or exit 126;
+        open STDERR, '>&', $stderr_writer or exit 126;
+        close $stderr_writer;
+        exec {$command} $command, @args;
+        exit 127;
+    }
+
+    close $stderr_writer;
+    my $diagnostic = q{};
+    while (1) {
+        my $chunk = q{};
+        my $bytes_read = sysread $stderr_reader, $chunk, 4096;
+        last if !defined $bytes_read || $bytes_read == 0;
+        if (length $diagnostic < 8192) {
+            my $remaining = 8192 - length $diagnostic;
+            $diagnostic .= substr $chunk, 0, $remaining;
+        }
+    }
+    close $stderr_reader;
+    waitpid $pid, 0;
+    return ($? == 0 ? 1 : 0, $diagnostic);
+}
+
+sub run_quiet_command {
+    my ($command, @args) = @_;
+    my ($ok) = run_command_capture_stderr($command, @args);
+    return $ok;
+}
+
+sub run_optional {
+    my ($command_name, @args) = @_;
+    my $command = find_command($command_name);
+    return 0 if !defined $command;
+    return run_quiet_command($command, @args);
+}
+
+sub connected_outputs {
+    my (@state_lines) = @_;
+    my @names;
+
+    for my $line (@state_lines) {
+        next if $line =~ /^\s*$/ || $line =~ /^[[:space:]]/;
+        my ($output_name) = split /[[:space:]]+/, $line, 2;
+        next if !output_name_safe($output_name);
+        push @names, $output_name;
+    }
+    return @names;
+}
+
+sub output_name_safe {
+    my ($output_name) = @_;
+    return defined $output_name && $output_name =~ /\A[A-Za-z0-9._-]+\z/;
+}
+
+sub is_internal_output {
+    my ($output_name) = @_;
+    my @prefixes = split /[[:space:]]+/, ($defaults{LABWC_OUTPUT_INTERNAL_PREFIXES} // 'eDP LVDS DSI');
+    for my $prefix (@prefixes) {
+        next if $prefix eq q{};
+        return 1 if $output_name =~ /\A\Q$prefix\E(?:-|[0-9])/;
+    }
+    return 0;
+}
+
+sub is_hdmi_output {
+    my ($output_name) = @_;
+    return defined $output_name && $output_name =~ /\AHDMI(?:-|[0-9])/;
+}
+
+sub output_modes {
+    my ($state_lines, $output_name) = @_;
+    my @modes;
+    my $in_output = 0;
+
+    for my $line (@{$state_lines}) {
+        if ($line =~ /^\Q$output_name\E\b/) {
+            $in_output = 1;
+            next;
+        }
+        if ($line !~ /^[[:space:]]/ && $in_output) {
+            last;
+        }
+        next if !$in_output;
+        next if $line !~ /^\s+(\d+)x(\d+)\s+px,\s+([0-9.]+)\s+Hz\b(.*)$/;
+
+        my ($width, $height, $hz, $flags) = ($1, $2, $3, $4 // q{});
+        my $size = "${width}x${height}";
+        push @modes, {
+            area       => $width * $height,
+            flags      => $flags,
+            hz         => $hz + 0,
+            preferred  => ($flags =~ /preferred/) ? 1 : 0,
+            rounded_hz => int(($hz + 0) + 0.5),
+            size       => $size,
+            value      => sprintf('%s@%sHz', $size, $hz),
+        };
+    }
+
+    return @modes;
+}
+
+sub mode_for_output {
+    my ($state_lines, $output_name) = @_;
+    my @modes = output_modes($state_lines, $output_name);
+    return undef if !@modes;
+
+    my $output_class = is_internal_output($output_name) ? 'INTERNAL' : 'EXTERNAL';
+    my $preferred_width =
+      optional_uint($defaults{"LABWC_OUTPUT_${output_class}_PREFERRED_WIDTH"});
+    my $preferred_height =
+      optional_uint($defaults{"LABWC_OUTPUT_${output_class}_PREFERRED_HEIGHT"});
+    my $preferred_hz =
+      optional_uint($defaults{"LABWC_OUTPUT_${output_class}_PREFERRED_REFRESH_HZ"});
+    my $fallback_hz      = optional_uint($defaults{LABWC_OUTPUT_FALLBACK_REFRESH_HZ});
+
+    if (defined $preferred_width && defined $preferred_height) {
+        my $preferred_size = "${preferred_width}x${preferred_height}";
+        my @size_matches = grep { $_->{size} eq $preferred_size } @modes;
+        if (@size_matches) {
+            if (defined $preferred_hz) {
+                my ($exact_mode) = grep { $_->{rounded_hz} == $preferred_hz } @size_matches;
+                return $exact_mode->{value} if defined $exact_mode;
+            }
+
+            my ($preferred_mode) = grep { $_->{preferred} } @size_matches;
+            return $preferred_mode->{value} if defined $preferred_mode;
+
+            my $fallback_mode = best_mode(\@size_matches, $fallback_hz);
+            return $fallback_mode->{value} if defined $fallback_mode;
+        }
+    }
+
+    my ($connector_preferred_mode) = grep { $_->{preferred} } @modes;
+    if (defined $connector_preferred_mode) {
+        return $connector_preferred_mode->{value}
+          if !defined($fallback_hz) || $connector_preferred_mode->{rounded_hz} >= $fallback_hz;
+    }
+
+    if (defined $fallback_hz) {
+        my @refresh_capable_modes = grep { $_->{rounded_hz} >= $fallback_hz } @modes;
+        if (@refresh_capable_modes) {
+            my $largest_refresh_capable_area = 0;
+            for my $mode (@refresh_capable_modes) {
+                $largest_refresh_capable_area = $mode->{area}
+                  if $mode->{area} > $largest_refresh_capable_area;
+            }
+            my @largest_refresh_capable_modes = grep {
+                $_->{area} == $largest_refresh_capable_area
+            } @refresh_capable_modes;
+            my $refresh_capable_mode = best_mode(\@largest_refresh_capable_modes, $fallback_hz);
+            return $refresh_capable_mode->{value} if defined $refresh_capable_mode;
+        }
+    }
+
+    my $largest_area = 0;
+    for my $mode (@modes) {
+        $largest_area = $mode->{area} if $mode->{area} > $largest_area;
+    }
+    my @largest_modes = grep { $_->{area} == $largest_area } @modes;
+    my $largest_mode = best_mode(\@largest_modes, $fallback_hz);
+    return $largest_mode->{value} if defined $largest_mode;
+
+    return undef;
+}
+
+sub logical_width_for_output {
+    my ($output_mode, $output_name) = @_;
+    return 0 if !defined $output_mode || $output_mode !~ /\A(\d+)x\d+@/;
+
+    my $physical_width = int($1);
+    my $output_scale = scale_for_output($output_name);
+    return int(($physical_width / $output_scale) + 0.5);
+}
+
+sub optional_uint {
+    my ($value) = @_;
+    return undef if !defined $value || $value eq q{} || $value !~ /\A\d+\z/;
+    return int($value);
+}
+
+sub best_mode {
+    my ($modes, $preferred_hz) = @_;
+    return undef if !@{$modes};
+
+    my @sorted = sort {
+        mode_sort_key($a, $preferred_hz) <=> mode_sort_key($b, $preferred_hz)
+          ||
+        $b->{hz} <=> $a->{hz}
+    } @{$modes};
+
+    return $sorted[0];
+}
+
+sub mode_sort_key {
+    my ($mode, $preferred_hz) = @_;
+    return 0 if !defined $preferred_hz;
+    return abs($mode->{rounded_hz} - $preferred_hz);
+}
+
+sub scale_for_output {
+    my ($output_name) = @_;
+    my $scale_value;
+
+    if (is_internal_output($output_name)) {
+        $scale_value = $defaults{LABWC_OUTPUT_INTERNAL_SCALE} // $defaults{LABWC_OUTPUT_SCALE} // '1';
+    } else {
+        $scale_value = $defaults{LABWC_OUTPUT_EXTERNAL_SCALE} // $defaults{LABWC_OUTPUT_SCALE} // '1';
+    }
+
+    return '1'
+      if $scale_value !~ /\A\d+(?:\.\d+)?\z/
+      || $scale_value < 0.5
+      || $scale_value > 3;
+    return $scale_value;
+}
+
+sub output_change_is_transient {
+    my ($diagnostic) = @_;
+    return 0 if !defined $diagnostic || $diagnostic eq q{};
+    return $diagnostic =~ /
+      Atomic[ ]commit[ ]failed
+      |Device[ ]or[ ]resource[ ]busy
+      |Resource[ ]busy
+      |No[ ]such[ ]output
+      |not[ ]found
+      |disconnected
+      |output[ ]is[ ]not[ ]available
+    /ix ? 1 : 0;
+}
+
+sub output_is_present {
+    my ($wlr_randr, $output_name) = @_;
+    return 0 if !output_name_safe($output_name);
+    my $state = capture_command($wlr_randr);
+    return 0 if $state eq q{};
+    return grep { $_ eq $output_name } connected_outputs(split /\n/, $state);
+}
+
+sub apply_output_change {
+    my ($wlr_randr, $output_name, @args) = @_;
+
+    for my $attempt (1 .. 3) {
+        return 'stopping' if !session_is_active();
+        my ($ok, $diagnostic) = run_command_capture_stderr($wlr_randr, @args);
+        return 'applied' if $ok;
+        return 'gone' if !output_is_present($wlr_randr, $output_name);
+        return 'failed' if !output_change_is_transient($diagnostic);
+        usleep(100_000) if $attempt < 3;
+    }
+
+    return 'transient';
+}
+
+sub enable_output {
+    my ($wlr_randr, $output_name, $output_mode, $output_position) = @_;
+    return 0 if !output_name_safe($output_name);
+    return 0
+      if !defined $output_position
+      || $output_position !~ /\A-?\d+,-?\d+\z/;
+
+    my $output_scale = scale_for_output($output_name);
+    my @base_args =
+      ('--output', $output_name, '--on', '--scale', $output_scale, '--pos', $output_position);
+
+    if (defined $output_mode && $output_mode ne q{}) {
+        my $result = apply_output_change(
+            $wlr_randr,
+            $output_name,
+            @base_args[0 .. 2],
+            '--mode', $output_mode,
+            @base_args[3 .. $#base_args],
+        );
+        return 1 if $result eq 'applied' || $result eq 'gone';
+        return 0 if $result eq 'stopping' || $result eq 'transient';
+    }
+
+    my $result = apply_output_change($wlr_randr, $output_name, @base_args);
+    return 1 if $result eq 'applied' || $result eq 'gone';
+    warn "warning: managed output activation failed for ${output_name}\n"
+      if $result eq 'failed';
+    return 0;
+}
+
+sub disable_output {
+    my ($wlr_randr, $output_name) = @_;
+    return if !output_name_safe($output_name);
+    my $result = apply_output_change(
+        $wlr_randr,
+        $output_name,
+        '--output', $output_name, '--off',
+    );
+    warn "warning: managed output deactivation failed for ${output_name}\n"
+      if $result eq 'failed';
+    return;
+}
+
+sub topology_changed {
+    my ($state_before, $state_after) = @_;
+    return 0 if $state_before eq q{} || $state_after eq q{};
+    return normalized_state($state_before) ne normalized_state($state_after) ? 1 : 0;
+}
+
+sub normalized_state {
+    my ($state) = @_;
+    my @lines = map {
+        my $line = $_;
+        $line =~ s/\s+$//;
+        $line;
+    } split /\n/, $state;
+    return join "\n", @lines;
+}
+
+sub refresh_output_chrome {
+    my ($delay_us) = @_;
+    return if !session_is_active();
+    return if !session_is_wayland_active();
+    $delay_us = 300_000 if !defined $delay_us || $delay_us !~ /\A\d+\z/;
+    usleep($delay_us);
+    return if !session_is_active();
+    # Systemd owns these chrome PIDs and serializes each replacement, so this
+    # helper never needs to signal a compositor or application process.
+    refresh_waybar();
+    refresh_dock();
+    return;
+}
+
+sub refresh_output_chrome_after_dpms {
+    return if !session_is_active();
+    return if !session_is_wayland_active();
+    usleep(300_000);
+    return if !session_is_active();
+    refresh_waybar();
+    refresh_dock();
+    return;
+}
+
+sub topology_restart_delay_us {
+    my ($selected_output, @outputs_to_disable) = @_;
+    my $delay_us = 300_000;
+
+    return $delay_us if !defined $selected_output || !is_internal_output($selected_output);
+    return $delay_us if !grep { !is_internal_output($_) } @outputs_to_disable;
+
+    my $extra_delay_seconds = optional_uint($defaults{LABWC_OUTPUT_INTERNAL_REFRESH_DELAY_SECONDS});
+    $extra_delay_seconds = 1 if !defined $extra_delay_seconds;
+    return $delay_us + ($extra_delay_seconds * 1_000_000);
+}
+
+sub session_is_wayland_active {
+    return 0 if !session_is_active();
+    return 1 if defined $ENV{WAYLAND_DISPLAY} && $ENV{WAYLAND_DISPLAY} ne q{};
+    return 1 if defined $ENV{SWAYSOCK} && $ENV{SWAYSOCK} ne q{};
+    return (($ENV{XDG_SESSION_TYPE} // q{}) eq 'wayland') ? 1 : 0;
+}
+
+sub session_is_active {
+    my $systemctl = find_command('systemctl');
+    return 0 if !defined $systemctl;
+    return run_quiet_command(
+        $systemctl,
+        '--user', '--quiet', 'is-active', 'labwc-session.target',
+    ) ? 1 : 0;
+}
+
+sub enabled_setting {
+    my ($value) = @_;
+    return 1 if !defined $value;
+    return $value =~ /\A(?:true|yes|1|on)\z/i ? 1 : 0;
+}
+
+sub refresh_waybar {
+    return if !session_is_active();
+    return if !enabled_setting($defaults{LABWC_ENABLE_WAYBAR});
+
+    my $systemctl = find_command('systemctl');
+    return if !defined $systemctl;
+
+    if (run_quiet_command(
+        $systemctl,
+        '--user', '--quiet', 'is-active', 'waybar.service',
+    )) {
+        run_quiet_command(
+            $systemctl,
+            '--user', '--no-block', 'restart', 'waybar.service',
+        );
+        return;
+    }
+
+    run_quiet_command(
+        $systemctl,
+        '--user', '--no-block', 'start', 'waybar.service',
+    );
+    return;
+}
+
+sub refresh_dock {
+    return if !session_is_active();
+    my $systemctl = find_command('systemctl');
+    return if !defined $systemctl;
+
+    # Output handling is deliberately limited to these independent chrome
+    # units. It never stops the Labwc session or terminates application PIDs.
+    run_quiet_command(
+        $systemctl,
+        '--user', '--no-block', 'restart', 'crystal-dock.service',
+    );
+    return;
+}

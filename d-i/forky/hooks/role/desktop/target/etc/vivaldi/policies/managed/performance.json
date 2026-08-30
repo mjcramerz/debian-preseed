@@ -1,0 +1,8 @@
+{
+  "HighEfficiencyModeEnabled": true,
+  "MemorySaverModeSavings": 1,
+  "BatterySaverModeAvailability": 1,
+  "HardwareAccelerationModeEnabled": true,
+  "IntensiveWakeUpThrottlingEnabled": true,
+  "TabDiscardingExceptions": []
+}

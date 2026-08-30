@@ -1,0 +1,21 @@
+// Managed by unattended-installer.
+// Permit only fwupd-refresh.service's unprivileged metadata refresh account
+// to refresh remotes. Binding the exception to the trusted system unit keeps
+// an unrelated process running as the same account from using it.
+
+(function() {
+    var FWUPD_REFRESH_USER = "fwupd-refresh";
+    var FWUPD_REFRESH_UNIT = "fwupd-refresh.service";
+
+    polkit.addRule(function(action, subject) {
+        if (
+            action.id === "org.freedesktop.fwupd.refresh-remote" &&
+            subject.user === FWUPD_REFRESH_USER &&
+            subject.system_unit === FWUPD_REFRESH_UNIT
+        ) {
+            return polkit.Result.YES;
+        }
+
+        return polkit.Result.NOT_HANDLED;
+    });
+})();

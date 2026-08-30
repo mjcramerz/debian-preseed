@@ -1,0 +1,7 @@
+# Managed by the installer apt-setup preferences generator.
+# The qemu addon needs the Zabbly Web UI package, but the rest of the Incus
+# stack can continue to come from the normal Debian archive.
+
+Package: incus-ui-canonical
+Pin: origin pkgs.zabbly.com
+Pin-Priority: 950

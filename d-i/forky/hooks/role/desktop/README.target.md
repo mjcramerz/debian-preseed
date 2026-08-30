@@ -1,0 +1,1119 @@
+Desktop-specific target assets belong here when a class helper needs files that
+must not apply to server installs. Shared target assets stay under
+`hooks/shared/target/`. Mirror the installed path directly under `target/`,
+for example `target/etc/...` or `target/usr/local/...`.
+
+Keep custom desktop-account units under
+`target/etc/skel/.config/systemd/user/`. The desktop late-command copies that
+tree into the primary account at `$HOME/.config/systemd/user/`, changes it to
+the account owner, keeps the unit directories private, and creates
+`labwc-session.target.wants/` links in both the skeleton and that account.
+Custom Labwc, KWallet, Whisper, notification, and timer units belong there.
+
+Keep administrator-owned user-manager policy under `target/etc/systemd/user/`.
+That includes complete drop-ins for Debian or vendor package units and custom
+units that must remain centrally root-owned rather than copied into a home.
+The managed libvirt session services use this path and apply `ConditionUser=`
+to the installer account; they remain static and are not enabled for every
+login. Do not move them into
+`target/etc/skel/.config/systemd/user/`, because those files become mutable
+account-owned copies and take precedence over the central policy. Every
+package-unit drop-in must be a complete tracked file; installer code may
+validate and stage it but must not construct its configuration body inline.
+This global placement is also required so the greeter's separate user manager
+sees the conditions that block desktop-only portal, audio, notification,
+policy-agent, terminal-server, and related units until the managed Labwc
+environment has been imported. Do not install custom Labwc or KWallet units
+globally. The shared D-Bus user-broker hardening template remains under
+`hooks/shared/target/etc/systemd/user/` because it also applies to every user
+manager.
+
+Keep system services and their administrator drop-ins under
+`target/etc/systemd/system/`. This includes the root-owned virtualization host
+unit, package-owned libvirt service drop-ins, and the Mullvad daemon
+DNS-backend and version-cache lifecycle policy.
+
+Do not add a Labwc identity file under `target/etc/environment.d/`. A global
+`environment.d` file applies to the greeter's user manager as well as the
+desktop account. The `labwc-session` wrapper exports static session policy and
+imports that bounded policy into the user manager before starting
+`labwc-compositor.service`. The compositor uses the already-required seatd
+backend. `labwc-autostart` imports the live compositor environment after the
+Wayland socket and user bus exist, then activates `labwc-session.target`.
+Session clients are ordered after that target, while the target is ordered
+after the compositor and all three remain ordered after the canonical user
+`dbus.service` and `dbus.socket`. Reverse shutdown ordering is therefore
+clients, session target, compositor, user broker, user D-Bus socket. The
+login wrapper clears only user-manager environment state after the compositor
+stops; it must not call `dbus-update-activation-environment` after the broker
+may have begun shutting down. The desktop `user@.service` drop-in orders user
+managers after `seatd.service`, reversing shutdown order so user-manager
+teardown completes before seatd stops. Keep system-manager readiness
+dependencies such as `systemd-user-sessions.service`,
+`systemd-logind.service`, the system `dbus.socket`, and `seatd.service` on the
+system-level `greetd.service` drop-in. A user unit cannot order against those
+PID 1 units; the compositor unit refers only to the user manager's
+`dbus.service` and `dbus.socket`.
+
+The managed compositor explicitly sets `WLR_XWAYLAND` to an empty value.
+wlroots treats that as a disabled Xwayland executable, so Labwc does not try
+the intentionally absent system `/usr/bin/Xwayland`. Keep the private
+`/opt/xwayland` runtime confined to the managed compatibility launchers; never
+expose it to the compositor, greeter, autostart, or general user-manager
+environment.
+
+KWallet activation overrides that refer to these account-local units belong in
+`target/etc/skel/.local/share/dbus-1/services/`. The desktop late-command copies
+that directory into the managed account. Do not divert or replace the package
+files in `/usr/share/dbus-1/services/`: the account-local XDG data directory has
+higher activation precedence for the desktop user, while the greeter retains
+only the package activation metadata visible in its own session.
+
+Desktop-only Perl runtime modules are authoritative here, not in the shared
+hook tree: AI & Copilots, Whisper, Digital Assets, and managed external-software
+modules live under
+`target/usr/local/lib/perl5/site_perl/{ai-copilots,whisper,digital-assets,external-managed-software}`.
+Their installed paths remain below `/usr/local/lib/perl5/site_perl/`; the
+desktop role owns their source staging and deployment.
+
+Curated Llama and Whisper download policy lives in the root-owned TSV catalogs
+below `target/usr/local/share/labwc-ai-copilots/`. Computer Management remains
+the only Fuzzel boundary: selecting AI & Copilots opens the managed Foot-first
+terminal wrapper, and every action, model, project, file, catalog-download, and
+free-text choice is completed there. The terminal selector displays only
+validated filenames for installed models and an aligned resource table for
+catalog downloads; it never displays internal catalog identifiers or absolute
+model paths. Catalog resource figures are informational. The privileged helper
+independently revalidates the catalog, resolves the exact LFS SHA-256 and byte
+count from the pinned Hugging Face commit, and then uses the existing atomic
+model publication path. The explicit custom Hugging Face URL flow retains its
+required filename, SHA-256, and exact-byte inputs.
+
+Application runtime configuration belongs at its installed path in this
+target mirror. The llama launcher is the tracked
+`target/data/llama/lib/llama` file and parses the rendered root-managed
+`/etc/llama/llama.conf` from `target/etc/llama/llama.conf.tmpl`. Whisper uses
+`/etc/whisper/whisper.conf`, rendered from
+`target/etc/whisper/whisper.conf.tmpl`. Do not move these authoritative files
+back into `scripts/late/templates/`, and do not use `/etc/default/llama.conf`
+for application runtime policy that is unrelated to an init script.
+The checksum-pinned release installers preserve llama's archive layout below
+`/data/llama/{bin,metadata,share}` and Whisper's archive layout below
+`/data/whisper/{bin,metadata}`; model storage remains below `/pool/cache`.
+All Llama and Whisper release variants are AMD64-only. CUDA variants retain
+their archive runpath to CUDA 12.8, and the shared desktop-graphics AppArmor
+abstraction read-maps only the required CUDART and cuBLAS libraries from that
+toolkit.
+
+Whisper uses `WhisperMode/**` as its sole Perl namespace. Do not add
+`Whisper/**` aliases or compatibility modules: the sole installed
+`/usr/local/libexec/whisper-record-toggle` entrypoint dispatches directly to
+`WhisperMode::CLI`.
+The Labwc session target starts a confined microphone-mute oneshot after the
+compositor is available. That unit starts PipeWire and WirePlumber, waits for
+an internal non-HDMI capture source, makes it the default, and mutes every
+usable source without blocking or terminating the graphical login when capture
+hardware is absent or delayed. WirePlumber route/default-target restoration is
+disabled so saved unmuted or HDMI selections cannot override the managed
+session policy. Whisper is the only managed path that deliberately unmutes the
+selected source; `WIN+R` and `Ctrl+Alt+R` share its user-owned recording
+toggle, every stop or failure path restores mute, and a bounded recording
+automatically finalizes after 15 seconds. Waybar microphone right-click only
+toggles the default source mute state and never starts recording. A tmpfiles
+metadata guard restores root ownership and mode for the generated runtime
+configuration before the desktop session starts. The transcription and
+persistent-server user units deliberately avoid per-user filesystem namespace
+directives because systemd would otherwise expose host-root-owned files through
+the overflow UID and invalidate that ownership check. Their AppArmor profiles
+retain the least-privilege filesystem boundary. Recording, persistent-server,
+and transcription units require the active `labwc-session.target` and stop
+within five seconds. The controller resets failed state only when systemd
+reports the specific recording or transcription unit failed. Asynchronous
+transcription also rechecks
+`labwc-session.target` immediately before its non-blocking start, so
+finalization during teardown cannot load or restart the unit. The public
+`whisper-cli` wrapper supplies the installed root-managed model unless the
+caller provides an explicit model option.
+Whisper application output, recording/transcription user-unit lifecycle
+messages, and its AppArmor profile-mode events are routed through rsyslog to
+`/var/log/managed/whisper/whisper.log` with root/adm ownership and bounded
+logrotate retention.
+
+The security class stages `/etc/apparmor.d/managed-desktop-wrappers`,
+`/etc/apparmor.d/managed-system-wrappers`, and the bounded
+`/etc/apparmor.d/usr.sbin.aa-status` reader. The desktop aggregate has one
+profile attachment for every installed desktop `bin` and `libexec` helper,
+including rendered session/root templates, all six desktop `sbin` wrappers,
+the shared XSSH send/retrieve wrappers, and the TPM2 enrollment launcher/helper
+pair. Internal helper calls transition to the matching managed profile through
+rules that also permit bounded preflight reads. Named targets are used unless a
+fan-out exceeds AppArmor's per-profile target limit, in which case the exact
+executable attachment resolves the same strict transition.
+Every non-comment policy row in the tracked
+`hooks/shared/target/etc/apparmor/managed-modes.conf.tmpl` source uses the
+`__DESKTOP_APPARMOR_STATE__` placeholder. During target staging,
+`DESKTOP_APPARMOR_STATE` renders that complete set to either enforce or
+complain mode and publishes the concrete result as
+`/etc/apparmor/managed-modes.conf`, including desktop and system wrappers,
+applications, services, browsers, containers, vendor policies, and the bounded
+`aa-status` reader. Disable remains an installed-system administrative action
+rather than a valid installer profile value.
+All managed GUI profiles share one Wayland/GLES/EGL/DRI/OpenGL policy with
+Mesa, Intel, NVIDIA, and shader-cache access. The shared AppArmor graphics
+abstraction permits the Vulkan loader ABI needed by package dependencies but
+explicitly denies Vulkan ICD paths, while the managed launchers prevent Vulkan
+feature or backend selection. GTK wrappers that render their own surfaces use
+the same graphics abstraction, and package-owned GUI
+profiles receive a generated `local/<profile>` include before their
+unconfined/default mode is changed, preventing incomplete compatibility
+profiles from flooding the AppArmor event log.
+Package applications and privileged tools do not inherit the shell
+wrapper domain; each wrapper receives only its bounded configuration, state,
+capture, report, or policy paths. The complete enforced set contains one
+installed-path attachment for every staged desktop wrapper when the selected
+desktop AppArmor state is enforce.
+FeatherPad, FocusWriter, KDiff3, Micro, Neovim, Qalculate, and Vim defaults are
+desktop-role assets and are staged only when the desktop role is selected.
+Recoll and Recollgui are installed with a multilingual, resource-bounded index
+baseline, XDG-cached index and OCR data, private per-user GUI and index
+configuration state, and GUI preferences which retain native desktop opening
+and system color handling. Credential stores, cloud/container authentication
+data, browser profiles, version-control metadata, removable mounts, and
+transient build trees are excluded. Only the KeePassXC subtree below
+`~/Syncthing` is excluded, so other synchronized documents remain searchable.
+Image-only PDFs use bounded Tesseract OCR with the installed English and Swedish
+language data, backed by Poppler extraction tools.
+
+The desktop role stages Labwc session assets, Waybar/Fuzzel/Mako/Kanshi user
+defaults, Zsh/Starship/fzf/btop defaults, portal and KWallet defaults, and a
+Labwc-bound `systemd --user` service for `crystal-dock`. The Waybar
+`quick-controls` groups render
+network, Bluetooth, keyboard-layout, and screenshot modules inside one bordered
+pill with transparent, borderless child controls. Internal eDP, LVDS, and
+DSI outputs use a native output-specific Waybar configuration where a ``
+leader opens the same four controls as a click-to-reveal drawer from right to
+left; external outputs keep the four controls permanently expanded inside the
+same pill. It includes an always-visible `` module
+backed by interactive `bluetoothctl`, plus an
+always-visible custom backlight module backed by `brightnessctl`. Right-clicking
+the network icon opens fixed controls for both installer-owned ifupdown
+adapters and NetworkManager-owned Ethernet/WiFi devices, plus confirmed MAC
+randomization for saved profiles and directly managed physical adapters.
+When either `addon/software` or `apps/mullvad` is selected, `pkgsel` installs
+the browser while `late_command` captures installer DNS and installs Debian's
+`systemd-resolved` before installing `mullvad-vpn` from Mullvad's
+detached-signature-verified latest Debian artifact. The resolver step requires
+the legacy `resolvconf` package to be absent, confirms that `/etc/resolv.conf`
+resolves through `/run/systemd/resolve/stub-resolv.conf`, seeds that target-side
+stub for remaining installer downloads, and verifies DNS before the Mullvad
+download begins. The Mullvad APT archive remains configured for the browser and
+later package updates without making the fresh install depend on a
+release-transition pool object. The target requires
+`systemd-resolved.service`, forces `mullvad-daemon.service` to use
+`TALPID_DNS_MODULE=systemd`, and keeps every Tailscale profile on
+`TAILSCALE_ACCEPT_DNS=false`, leaving one intentional system DNS owner. It
+stores Mullvad's application-version cache under the systemd-managed persistent
+`/var/lib/mullvad-version-cache` directory and orders the daemon after
+`local-fs.target`, `systemd-resolved.service`, and
+`systemd-tmpfiles-setup.service`. The role's tmpfiles policy creates the
+root-owned directory with mode `0755` but does not pre-create
+`version-info.json`; Mullvad remains solely responsible for writing valid cache
+data. No account identifier, login, or automatic VPN connection is
+provisioned. The desktop schema override sets
+`org.gnome.system.wsdd` to `display-mode='disabled'`, preventing GVFS from
+broadcasting discovery traffic across Mullvad, libvirt, Incus, LXC, and other
+managed interfaces.
+Right-clicking the Bluetooth icon opens quick scan, pair, connect, and
+disconnect actions plus nested device and adapter management. BlueZ starts
+independently and owns controller policy from `/etc/bluetooth/main.conf`; the
+optional hardened
+`bluetooth-controller-init.service` runs afterward without overriding rfkill
+policy. Its low-level `btmgmt` request is wrapped in an external timeout so the
+BlueZ 5.85 client cannot hold the oneshot open. User control continues over the
+standard BlueZ D-Bus API on the managed
+dbus-broker system bus. KeePassXC is part of the desktop
+baseline with a mode-0600 hardened configuration, a private
+`~/Syncthing/keepassxc/` database directory, and a native-Wayland launch path
+confined by the dedicated no-network KeePassXC AppArmor profile. Avoiding a
+second Bubblewrap/AppArmor layer keeps Qt's atomic configuration-file writes
+functional while preserving the application-specific filesystem boundary.
+Waybar uses the compositor's
+native `ext/workspaces` protocol instead of a custom backend. Xwayland remains
+excluded from system package installation by package selection and APT policy.
+The installer instead verifies and extracts the Debian `xwayland`,
+`xserver-common`, and `libxcb-cursor0` package payloads below `/opt/xwayland`
+without registering them with dpkg and without adding wrappers or copied
+executables. The desktop login wrapper, greeter wrapper and client, Labwc
+autostart, and the persistent user-manager environment explicitly scrub
+inherited X11/Xwayland state before profiles are sourced, children are
+launched, or activation variables are imported. Codex and the managed ChatGPT
+launcher apply the same ambient-state boundary. These paths do not bind or
+execute the private payload, publish an X11 display, configure Xwayland
+persistence, or create an X11 socket.
+Only the dedicated Zoom/Discord launcher may inspect the root-owned private
+payload. Its Bubblewrap constructor keeps the system `/usr` read-only and
+exposes the verified private payload read-only below `/opt/xwayland`; no
+compositor-created X11 socket is imported. The compatibility CLI accepts only
+`zoom` and `discord`; all other managed applications are excluded from this
+path, and neither Xorg nor the system `/usr/bin/Xwayland` is an allowed server.
+Bubblewrap creates a private mode-1777 `/tmp/.X11-unix`, a private
+`/run/user/$UID`, and a private network namespace configured by `slirp4netns`.
+The application therefore retains outbound network access without sharing the
+host abstract Unix-socket namespace where the Labwc session's Xwayland display
+may already own `@/tmp/.X11-unix/X0`. A sandbox-local resolver file points at
+the slirp DNS endpoint; the host resolver is not reused inside this namespace.
+The constructor binds only the current Labwc Wayland socket into the private
+runtime and holds an exclusive lock-only bind for that imported socket name.
+Cage consequently selects a different nested Wayland socket instead of trying
+to replace the imported outer socket. The lock descriptor remains owned by the
+constructor until Bubblewrap exits and is never passed to the application.
+
+The launcher then starts Cage as a nested Wayland compositor and fixes
+`WLR_BACKENDS=wayland` and `WLR_WL_OUTPUTS=1`, so each invocation produces one
+outer Cage surface in Labwc. It also fixes
+`WLR_XWAYLAND=/opt/xwayland/usr/bin/Xwayland` and supplies only the curated
+private Xwayland library directory while Cage and its Xwayland child start.
+Cage is invoked without an Xwayland command-line toggle: its compiled wlroots
+Xwayland/XWM integration starts automatically, while `WLR_XWAYLAND` selects the
+private server binary. That integration owns display selection, listener
+lifecycle, and rootless X11 surfaces inside the private filesystem and network
+namespaces. The managed path does not create a fixed `:99` listener, pass an
+X11 descriptor, import a host X11 socket, or invoke Xwayland with rootful
+decoration or geometry options.
+Because Bubblewrap sets `no_new_privs`, Cage, its Xwayland child, the inner
+supervisor, and the application inherit the same already-confined child
+profile instead of attempting post-namespace AppArmor transitions. Same-profile
+signal mediation permits their bounded lifecycle control. Direct execution of
+Cage or either the private or system Xwayland binary still enters a separate
+fail-closed attachment outside this launcher path.
+Inside the compatibility child, AppArmor permits only the observed fixed
+diagnostic and desktop helpers and keeps each one in the same inherited
+profile. Xwayland's compiled keymap, Qt's architecture-specific shader cache,
+and Zoom's atomic configuration files are owner-scoped. CPU topology and
+vulnerability data, CPU frequency minima, PCI identifiers, power-supply
+status, iproute2 group metadata, and portal inventory are read-only. The
+compatibility policy does not add a generic home rule, writable procfs or
+sysfs access, a new capability, broad process control, or unconfined
+execution.
+The inner supervisor requires Cage to replace the outer `WAYLAND_DISPLAY` with
+its nested socket, requires Cage's local `DISPLAY` and private X11 socket, and
+revalidates the private Xwayland executable, protocol data, XKB compiler, and
+libraries. It then removes `WLR_XWAYLAND`, the nested-backend controls, and all
+other Xwayland control variables before starting only the allowlisted Zoom or
+Discord executable. Cage remains the Xwayland owner and exits when the
+supervisor exits. Zoom keeps Qt's XCB backend inside that rootless Xwayland
+boundary; Discord may continue preferring its native Wayland flags while
+retaining the same tightly scoped Xwayland compatibility. Private `/tmp`,
+`/var/tmp`, and `/dev/shm` mounts are explicitly mode `01777` so desktop
+applications can use standard temporary-file semantics.
+Their required PipeWire and pipewire-pulse sockets are mandatory sandbox
+inputs, and both namespaces bind only validated V4L2/media camera character
+devices rather than the host `/dev` tree. Each launch creates separate filtered
+`xdg-dbus-proxy` endpoints for the desktop session bus and the system bus. The
+host `/run/dbus/system_bus_socket` is never bind-mounted into either namespace;
+the filtered system proxy alone appears at that conventional path, with no
+system service allowlist by default. Discord also receives its current
+notification, portal, tray, and Secret Service session names, while Zoom owns
+only its `org.kde.*` compatibility names and may talk to ScreenSaver.
+Discord's user-space host/module updater is disabled in its bounded
+`settings.json` only after the launcher validates the complete root-owned
+stable runtime below `/opt/discord`. The software late phase has already
+downloaded and digest-verified Discord's manifest, host `full.distro`, and
+declared module `full.distro` files before the first login. The host executable
+is `/opt/discord/Discord`; root-owned module directories are exposed through
+Discord's versioned per-user module layout without granting execution or mmap
+permission to `~/.config/discord/app-*`. The internal
+`/usr/local/libexec/managed-discord-distro` program only validates and safely
+extracts already downloaded manifests and archives for the preseed bootstrap,
+scheduled updates, and offline repair. Scheduled apply runs also rebuild a
+damaged `/opt/discord` from those retained artifacts when no newer release is
+pending. Publication discards any module subtree bundled in the host archive
+and rebuilds it exclusively from the manifest-declared, digest-verified module
+archives. A failed staging operation preserves the stable updater reason while
+reporting the exact host, module, metadata, normalization, or runtime-validation
+stage in installer stderr and the managed updater log.
+Zoom's host-side `~/.config/zoom` directory is mounted as the sandbox's complete
+`~/.config` directory. This lets Qt create, lock, and atomically replace
+`zoomus.conf` while keeping every unrelated host configuration file outside the
+sandbox.
+Other Qt applications and systemd/D-Bus-activated Qt desktop services use the
+native Wayland QPA backend, and the staged Labwc configuration must not include
+legacy display-server startup assets such as `xinitrc`. Crystal Dock reads per-desktop configuration from
+`~/.config/crystal-dock/labwc/`; the
+role also stages the same preset under `/etc/xdg/crystal-dock/labwc/` so
+Crystal Dock can copy it on first run when a home directory does not already
+contain a dock configuration. The installer renders the profile-owned Qt6ct
+preset with the desktop-wide `Papirus-Dark` icon theme into both `/etc/skel`
+and `/etc/xdg`, then copies the skel configuration into the primary account.
+The user service launches `/usr/bin/crystal-dock` directly after refreshing the
+primary account's managed desktop entries. It inherits the real Labwc user
+manager environment without rewriting `HOME`, `XDG_CONFIG_HOME`, or user Qt
+configuration, enforces native Wayland/OpenGL rendering, and disconnects the
+dock process and its children from the service journal stream. Browser desktop
+entries still pass through `labwc-managed-app`, which forces native Wayland and
+disables Vulkan for Chromium-family applications. KWallet portal and
+wallet-daemon D-Bus activation files are account-local under
+`~/.local/share/dbus-1/services/`; the package files under `/usr/share` remain
+untouched and therefore cannot advertise desktop-only systemd units to the
+greeter. Both managed commands set `QT_NO_XDG_DESKTOP_PORTAL=1`, so neither
+`ksecretd` nor `kwalletd6` attempts to register itself as a host portal
+application while ordinary Qt applications retain their normal portal
+integration. The managed
+`labwc-autostart` helper imports the live Wayland environment and immediately
+activates `labwc-session.target`, making the package-owned portal services
+available for D-Bus activation before ordinary desktop clients request
+`org.freedesktop.portal.Desktop`. It then uses `labwc-output-watch` for the
+bounded output-readiness probe before launching later session clients.
+Readiness requires
+`wayland-info` to observe a client-visible `wl_output` with a current mode; an
+output-management head reported by `wlr-randr` is not sufficient. When a head
+exists before the client registry is ready, the helper synchronously applies
+the managed output policy once and retries the client-visible probe under the
+same monotonic ten-second deadline. The helper then coalesces burst DRM events
+before one settled refresh. Output-dependent units such as Foot and the output
+watcher retain their own readiness gates rather than delaying the entire
+session target. `labwc-output-refresh` serializes output changes,
+re-applies the saved DPMS topology, and confirms Labwc has committed its output
+geometry before re-seating session chrome. Foot's vendor service remains
+available for socket activation but is not eagerly linked into
+`labwc-session.target`; only `foot-server.socket` is session-enabled, and both
+units require the active Labwc target while the service repeats the bounded
+client-visible readiness check before executing Foot.
+Systemd-owned Waybar instances start only after the compositor-owned
+`labwc-session.target` is active. Outside an authenticated reboot or power-off,
+the output helpers never stop `labwc-session.target`, the compositor, or a user
+application. The watcher only cancels its own debounce and udev-monitor child
+processes; the refresher limits its non-blocking systemd requests to Waybar and
+Crystal Dock after a real output change and does not manipulate Fuzzel or other
+application PIDs.
+The per-account target disables systemd's default target-after-member ordering
+so Waybar and the other session-bound user units can be both wanted by and
+ordered after the Labwc lifecycle boundary without an ordering cycle.
+Account-local Labwc units combine `Requisite=`, `After=`, and `PartOf=` with
+`labwc-session.target`. Root-owned drop-ins for package units cannot use that
+hard requirement because they also load in the greeter user manager, where the
+account-local target does not exist. Those drop-ins instead use the imported
+desktop environment, `After=`, and `PartOf=`; D-Bus-facing services also verify
+that the target is active before execution. Target stop or restart still
+propagates to loaded desktop children without making greeter-side activation
+resolve a nonexistent unit.
+The Labwc shutdown hook validates its invocation mode and performs no service,
+socket, process, mount, clipboard, or filesystem teardown. Labwc launches the
+hook asynchronously while compositor termination proceeds, and the compositor
+wrapper only clears imported Labwc, Wayland, and X11 activation variables after
+Labwc exits. The systemd user manager remains the sole owner of ordered session
+unit teardown.
+`gvfs-daemon.service` uses `KillMode=mixed` and a 15-second stop ceiling so
+the main daemon can first release its FUSE and mount helpers without losing
+systemd's bounded final cgroup cleanup.
+Suspend, reboot, and power-off keep `labwc-admin-action` in the initiating
+desktop process. The helper validates its fixed action allowlist and the
+private user runtime directory, then holds one non-blocking runtime lock across
+the foreground `pkexec` request for the root-owned
+`labwc-admin-action-root` helper. The exact-program `03-labwc-power.rules`
+policy precedes the generic active/local gate and returns `AUTH_ADMIN` only for
+members of `sudo`, so Hyprpolkit displays the administrator-password prompt
+without relying on a display manager or login1 to classify the session active.
+Concurrent button invocations therefore fail visibly before a second Polkit or
+PAM conversation can begin.
+The root helper independently requires a valid non-root `PKEXEC_UID`, resolves
+and validates that account through NSS, and accepts only `suspend`, `reboot`, or
+`poweroff`. It then queues the fixed
+`labwc-admin-action@<uid>-<action>.service` instance without waiting. PID 1
+starts the separately confined `labwc-admin-action-worker`, so stopping the
+requester's `labwc-session.target` cannot kill the authenticated action as a
+descendant of `waybar.service`.
+The worker revalidates the numeric UID and NSS identity. Suspend queues the
+matching absolute `systemctl` power verb without pre-draining the desktop. For
+reboot and power-off, the worker first uses systemd's
+`--user --machine=<account>@.host` connection to synchronously stop
+`labwc-session.target` under a 45-second ceiling. Reverse user-unit ordering
+stops output hotplug handling, audio, Bluetooth clients, virtualization, and
+the remaining session clients while the compositor, user bus, hardware, and
+system services are still available; the worker then queues the exact system
+power verb even if that bounded best-effort pre-drain reports an error.
+A rejected, cancelled, or failed request leaves Labwc and
+`labwc-session.target` running and produces a persistent critical Mako
+notification. The helper never calls the lifecycle hook out of band, acquires
+a recursive shutdown inhibitor, or changes authorization-agent state.
+Hyprpolkit remains available while the request is pending and stops through
+`PartOf=labwc-session.target` only after authentication succeeds and the root
+helper has queued the PID-1 worker that begins the bounded session pre-drain.
+The shared Tailscale service drop-in orders `tailscaled.service` after
+`NetworkManager.service` and `network.target`, retaining the physical network
+until its bounded 30-second shutdown completes. Its pre-start cleanup ignores
+only the exact race where `tailscale0` disappears between the guarded sysfs
+check and Tailscale's own enumeration; it confirms the link is absent before
+accepting that result and propagates every other cleanup failure.
+The drop-in filters only Tailscale's deterministic non-fatal
+`ipnext: work queue shutdown failed: execqueue shut down` diagnostic, emitted
+after upstream closes and then waits on the same extension queue; all other
+daemon messages remain visible.
+Systemd eagerly starts and directly owns `ksecretd` and `hyprpolkitagent`
+through `labwc-session.target`. The Hyprpolkit drop-in applies bounded
+failure-restart and stop behavior. Autostart waits for those services and the
+selected portal services to report active before it starts Waybar. Debian's
+package D-Bus service files own the portal, compatibility, and `kwalletd6`
+names; the account-local service directory adds only the otherwise missing
+`org.freedesktop.secrets` alias. `kwalletd6` therefore starts on demand without
+duplicating package service names or racing an eager custom daemon unit.
+Systemd also directly owns `labwc-health-notify`; the notifier performs its
+signal trap and display/socket preflight before its ten-second coalescing delay,
+terminates the delay child on target stop, and exits successfully. The service
+uses no separately killable `ExecCondition` control process. No shared
+session-child wrapper, user-unit stop, synchronous GVfs/FUSE unmount, process
+signal, clipboard clearing, or global `sync` runs in the compositor shutdown
+hook. The Labwc session wrapper only clears imported compositor environment
+after Labwc exits; systemd owns user-service and socket teardown. Because systemd drop-ins
+cannot remove dependency directives from Debian's vendor unit, the role
+installs a complete managed `waybar.service` that contains no
+`graphical-session.target`
+relationship and follows the same three-directive Labwc lifecycle contract. It
+is deliberately not enabled from a user target. After a
+profile-owned two-second delay, `labwc-autostart` starts it only when
+`LABWC_ENABLE_WAYBAR` is enabled, waits for a healthy systemd-owned process,
+stops a failed job, and only then uses the bounded direct fallback. The unit
+names the rendered config and style explicitly and sets a deterministic `PATH`
+for managed custom-module helpers. The Unity tray compatibility drop-in
+retains null standard streams, preventing desktop applications launched by
+Waybar from inheriting a Waybar-tagged journal stream while keeping the
+internal and external bar definitions aligned without duplicate processes.
+Crystal Dock restarts directly through its `systemd --user` service, preserving
+the authenticated desktop user's environment and configuration. A
+connected HDMI output overrides every other connector: the first HDMI output
+is placed at `0,0`, while internal panels and all other external outputs are
+disabled. The greeter follows the same HDMI-first policy, otherwise selecting
+the internal panel before using a non-HDMI external connector as a last resort;
+it starts on the first usable Wayland output without a fixed sleep or Labwc
+auto-enable race. Without HDMI, the automatic topology policy extends the first
+internal panel across every connected external output on laptops, but keeps
+stationary systems external-only when no eDP, LVDS, or DSI connector is
+present. Internal and external connectors use separate preferred-mode
+settings, and unsupported preferences fall back to the connector-reported
+preferred mode.
+Mako receives local mail, disk, thermal, memory, battery, restart-required,
+managed-software, Timeshift, authentication, USB/hardware-hotplug, storage-error,
+AppArmor-denial, firewall-drop, calendar-sync, OCR, and managed desktop-action
+events. Rsyslog writes the full authentication, USB, AppArmor, nftables, and
+storage records to protected `root:adm` logs. The desktop bridge consumes
+root-owned category-only signal files below
+`/var/lib/labwc-notifications/security`. Those files are restricted to the
+dedicated `logreader` group. The primary desktop account is added only to that
+group, allowing the notification bridge to read sanitized event counters
+without granting access to the underlying authentication, audit, AppArmor,
+nftables, USB, or storage logs. Auditd keeps `/var/log/audit/audit.log`
+authoritative for `ausearch`; rsyslog tails that file directly with `imfile`
+and writes the dedicated managed audit and AppArmor logs. The audit syslog
+dispatcher stays disabled and security-class staging masks journald's audit
+socket, so audit events do not traverse or consume the journal.
+Timeshift results are queued under `/var/lib/labwc-notifications/timeshift` so
+snapshots taken without an active desktop session are reported on the next
+Labwc login instead of being discarded. Started, completed, and failed
+snapshot events are delivered independently; persistent timer catch-up runs
+are serialized, and notification-queue errors do not replace the Timeshift
+process status.
+
+The greetd Labwc session renders gtkgreet with a dedicated 17px typography
+baseline instead of inheriting the desktop-wide GTK size, and the login clock
+uses a prominent 104px size. Its output helper applies the same HDMI-only
+override with scale `1` so the layer-shell surface keeps the monitor's full
+logical geometry. External greeter outputs first request the profile-owned
+preferred external mode, normally `1920x1080` at the configured refresh rate,
+and retry with the connector-preferred mode when that exact mode is
+unavailable. This keeps the greeter comfortably sized on high-resolution
+external monitors without the half-width logical canvas caused by scale `2`.
+The isolated greeter process tree sets `GTK_USE_PORTAL=0` and
+`GIO_USE_PORTALS=0`, preventing its GTK applications from requesting
+desktop-only portal activation from the `_greetd` user manager. The real
+desktop session retains normal portal integration after Labwc imports its
+Wayland environment into the desktop account's user manager.
+Labwc also auto-enables DRM outputs, and a transient output-helper failure is
+logged but does not terminate gtkgreet before it can create a login session.
+Labwc suspend, reboot, and power-off keep one foreground `pkexec` request in
+the desktop process. The dedicated exact-program Polkit rule leaves one
+Hyprpolkit administrator prompt for the requested power transition regardless
+of which display manager launched the managed Labwc Wayland session.
+The greeter owns only tty1 and has no Labwc bindings for `Ctrl+Alt+F2` through
+`Ctrl+Alt+F6`; normal Linux VT handling therefore reaches the standard recovery
+gettys on tty2 through tty6, while `Ctrl+Alt+F1` returns to the tty1 greeter.
+
+F2FS desktop profiles render a slightly smaller internal-panel typography
+baseline across Labwc, GTK, Qt, Waybar, Fuzzel, gtkgreet, and Crystal Dock.
+Chromebook-specific F2FS profiles retain their more compact dock and panel
+geometry while sharing the same reduced Qt font baseline.
+
+Application shortcuts use `Super+F` for Thunar, `Super+B` for Vivaldi,
+`Super+T` for the managed Foot terminal, `Super+E` for Tuta Mail, `Super+P`
+for Bitwarden, `Super+W` for Wayscriber, `Super+S` for Spotify, `Super+C` for
+Qalculate, and `Super+O` for Filen. Power and output refresh remain available
+on `Super+Shift+P` and `Super+Shift+O`.
+
+The same application actions are also available on
+`Ctrl+Alt+F/B/T/E/P/W/S/C/O/A`, including `Super+S` and `Ctrl+Alt+S` for Spotify.
+`Ctrl+Alt+Space` opens the Fuzzel application launcher.
+
+Mako owns the session D-Bus `org.freedesktop.Notifications` destination through
+the dbus-broker compatibility alias. Pure-privacy application sandboxes may
+talk only to that notification destination and the existing portal names
+through their filtered `xdg-dbus-proxy` session bus. Privileged services must
+not use the user session bus directly; they queue bounded printable records
+with `/usr/local/sbin/labwc-notify`, and `labwc-health-notify` relays trusted
+root-owned events from `/var/lib/labwc-notifications/system` after a Labwc
+session is active.
+
+The managed Fruux calendar action runs collection discovery for both calendar
+and task pairs before every synchronization. Vdirsyncer retains the downloaded
+VEVENT and VTODO resources as local `.ics` files below
+`~/.local/share/calendars/personal` and
+`~/.local/share/calendars/tasks`, where other desktop applications can import
+or inspect them without contacting Fruux directly.
+
+The `labwc-plans` user service starts at the same Labwc session boundary and
+polls the primary account's `~/Syncthing/sleek/*.txt` files. It accepts only
+active `(A)`, `(B)`, and `(C)` entries, sends a one-time notification for each
+new entry, and persists per-channel delivery state so Telegram and ntfy
+failures are retried independently after connectivity returns. Date scheduling
+uses `t:` as the recurrence start, `due:` as an inclusive end, and
+`rec:N[d|b|w|m|y]` for day, business-day, week, calendar-month, and
+calendar-year intervals; month- and year-end recurrences clamp to the final
+valid day when the original day does not exist. Timed entries receive reminders
+at 60, 45, 30, 15, 10, and 5 minutes before the event plus the event start;
+every occurrence also receives a 10:00 local-time notification. The first
+daemon scan does not replay past scheduled reminders; subsequent restarts catch
+up from persisted state. The installer renders the Telegram API key and chat
+ID from
+`telegram_api_key=` and `telegram_chat_id=` kernel arguments into root-owned
+`/etc/default/labwc-plans`, while the configured ntfy topic remains
+`labwc_plans_notify`. The same protected configuration backs the installed
+`/usr/local/bin/telbot` terminal wrapper. `telbot -m "text"` uses
+`sendMessage`, `telbot -u PATH` uploads an unchanged file with `sendDocument`,
+and `telbot -c IMAGE` sends an image with `sendPhoto`; captions, plain/HTML/
+MarkdownV2 formatting, silent delivery, protected content, photo spoilers,
+link-preview suppression, stdin text, and bounded timeout overrides are
+documented by `telbot --help`. The wrapper validates the root-owned
+configuration and local upload before making one non-retried HTTPS request, and
+never places the bot token in a child-process argument.
+
+The `telpoll` user service reads its own root-owned runtime policy from
+`/etc/telpoll/telpoll.conf`. It reads only the existing protected Telegram
+credentials from `/etc/default/labwc-plans` and keeps the token out of its
+process environment. It performs a 60-second `getUpdates` long poll, accepts
+messages only from the configured chat ID, persists the update offset, and
+streams bounded attachments into `~/Downloads/telegram` through atomic
+user-owned files. Voice attachments with an `.oga` or `.ogg` suffix are
+converted by ffmpeg to mono 16 kHz PCM WAV files under
+`~/Music/Whisper/audio`, transcribed with the managed Whisper CLI flags, stored
+under `~/Music/Whisper/transcribed`, and appended idempotently to
+`~/Syncthing/sleek/whisper.txt` using the same todo.txt voice-task syntax as the
+local recording flow. After all local processing succeeds, the service calls
+`deleteMessage`. Telegram's Bot API has no separate remote-file deletion
+method, so the service can delete the source message but cannot independently
+purge Telegram's internal file cache. The service receives the session target's
+stop through `PartOf=`, terminates its complete control group, and reserves a
+five-second stop deadline. The active poll receives `SIGTERM` immediately and
+cannot delay logout, reboot, or power-off beyond that bounded grace period
+before systemd removes any remaining cgroup process.
+
+Foot and the Kitty fallback render their font family and size from the selected
+desktop profile through `LABWC_TERMINAL_FONT_FAMILY` and
+`LABWC_TERMINAL_FONT_SIZE`; the managed profiles preserve the existing
+`Noto Sans Mono` size `12` baseline.
+
+Each new interactive Bash or Zsh instance in Foot or Kitty sources readable,
+non-symlinked `~/.profile.d/[0-9][0-9]-*.sh` fragments in lexical order. Login
+shells keep the fragments single-loaded, while non-login terminal shells still
+pick up managed addon environment such as development, firmware, and Vagrant
+paths. Zsh keeps its general completion cache but disables persistent
+`DEBS_*` package caches for `apt`, `apt-get`, `apt-cache`, and `apt-mark`, so
+`sudo apt install <TAB>` builds candidates once in memory per shell without
+re-sourcing a malformed `DEBS_avail` file. Nano uses the managed XDG
+configuration at
+`~/.config/nano/nanorc`, with line numbers, indentation and navigation
+defaults plus the standard, Debian-specific, and extra syntax-color bundles
+shipped by the installed `nano` package.
+
+The opt-in `devops` and `virtops` commands each start a nested interactive shell
+in the caller's current terminal and working directory. Their activated
+environments remain confined to that nested shell. `virtops` uses no activation
+marker; `exit` returns to the unchanged caller. The DevOps nested shell is titled
+`[devops]`; managed Zsh `precmd` and `preexec` hooks keep that title visible
+while it is active.
+
+With `addon/devops`, standalone Codex and the managed ChatGPT/Codex launcher
+source `~/.profile.d/71-devops-de.sh` afresh on every invocation. They validate
+profile ownership, require the active marker, and propagate the complete
+bounded export set without redeclaring tool-specific variables or PATH entries.
+Standalone Codex additionally compares its activation with a clean Bash
+activation; ChatGPT activates the POSIX-compatible profile after clearing the
+ambient environment. Both synthetic developer identities use `/bin/zsh`.
+Their real `~/Downloads`
+and `~/Workspace` directories plus `/pool`, `/data/codex`, and
+`/data/downloads` are mounted read-write, while normal Unix ownership and mode
+checks still apply. Other home paths remain hidden except for selected
+read-only development configuration and managed application state; other
+`/data` paths, installed `/usr` and `/opt` toolchains, and package metadata
+remain read-only. Root-managed Codex binaries, release metadata, repository
+configuration, and the memories Git guard remain protected. Physical working
+directories below the writable roots are preserved, except that standalone
+Codex rejects `/data/codex/runtime` because that control-state subtree remains
+masked inside its sandbox. The managed PATH includes only installed
+repository-supported CUDA toolkit bin directories, ordered CUDA 13.1, 12.9,
+then 12.8 when all three exist. PowerShell is
+available through `/usr/bin/pwsh`, and Bazel is available to command shells
+through the mounted DevOps profile and user Bazel configuration; Bazel is not
+modeled as a managed GUI application. Accelerator launches bind available DRM,
+KFD, `/dev/accel`, and selected NVIDIA device nodes while retaining synthetic
+host identity and the DMI, network, storage, and firmware sysfs masks.
+When `addon/qemu` also supplies valid private session directories, the launch
+environment selects legacy libvirtd mode after validating the top-level runtime
+directory as a direct, account-owned private path. `qemu.cfg` explicitly
+selects Debian's `libvirt-daemon`, daemon-common, split driver, log, lock, and
+lockd-plugin packages while rejecting `libvirt-daemon-system`.
+`libvirt-daemon` supplies `/usr/sbin/libvirtd` and the system
+`libvirtd.service`; the driver packages supply the `libvirt_driver_*.so`
+modules loaded by it, and the log and lock packages supply
+`/usr/sbin/virtlogd` and `/usr/sbin/virtlockd`. The late helper fails closed
+unless all explicit packages, those three executables, and every required
+driver module are present.
+
+The root host unit and package-unit logging drop-ins are installed under
+`/etc/systemd/system/`. The account services are centrally managed under
+`/etc/systemd/user/`, restricted by `ConditionUser=`, and deliberately not
+copied through `/etc/skel/.config/systemd/user/`; account-specific libvirt
+configuration is instead seeded through `/etc/skel/.config/libvirt/`.
+`managed-libvirt-runtime.service`, `managed-virtlogd.service`,
+`managed-virtlockd.service`,
+`libvirt-session.service`, and `virt-session-storage.service` remain static
+without login-time enablement. `managed-libvirt-runtime.service` alone owns
+`$XDG_RUNTIME_DIR/libvirt` through `RuntimeDirectory=libvirt` mode `0700`; the
+log, lock, and session daemons require it, so the directory remains while any
+dependent is active without using `RuntimeDirectoryPreserve=yes`. The
+explicitly started account `libvirtd` exposes only
+`$XDG_RUNTIME_DIR/libvirt/libvirt-sock`; ordinary desktop clients inherit
+`LIBVIRT_AUTOSTART=0`, and the privileged
+`/run/libvirt/libvirt-sock` remains outside the application sandboxes.
+The interactive `virtops` command and the managed
+`/usr/share/applications/virt-manager.desktop` entry both source the same
+account-owned DevOps and virtualization profiles. Each client runs in a
+separate transient user unit that requires the on-demand storage initializer,
+which starts the ordered user units, verifies `qemu:///session`, and initializes
+the rendered `default` pool below
+`/pool/libvirt/session/<account>/images`. `virtops` holds a real libvirt event
+connection for the lifetime of its dedicated terminal shell. Virt-manager is
+bound to `labwc-session.target` with journal-only output, so it stops before the
+compositor and does not inherit the login console. The final client releases
+the initializer; idle `libvirtd` retires after 30 seconds, while a running
+domain keeps the daemon, logger, and lock manager alive. The same pool remains
+the Vagrant provider pool.
+Classic LXC remains on native `/pool/lxc` storage. The managed `lxcfs` stop hook
+uses three normal unmount attempts followed by one validated lazy detach. After
+a successful lazy-detach request, a still-reported `fuse.lxcfs` mount is treated
+as asynchronous reference draining; a failed detach or changed filesystem type
+remains fatal. `lxcfs.service` has a five-second stop ceiling.
+Virt-manager receives the same image path through a compiled GSettings
+override. Daemon records are retained at
+`/var/log/managed/libvirt/daemons.log`. The system and user units use
+journal-only output and never copy messages to a console; rsyslog routes the
+stable `managed-libvirt-runtime`, `virt-session-storage`, `libvirtd`,
+`virtlogd`, `virtlockd`, and `virt-host-managed` identifiers and marks those
+records as handled before generic facility or emergency-wall rules. The system
+`libvirtd` drop-in also requires `virtlockd.socket` and orders after
+`virtlockd.service`; system `virtlogd` rotates at 2 MiB before Debian's package
+fallback threshold. Logrotate checks `daemons.log` daily, retains four
+rotations for at most seven days, and rotates it at 16 MiB. The user
+`virtlogd` cleaner root is
+`/var/log/managed/libvirt/<account>/cache/libvirt/qemu`, directly above the
+account-private `qemu/log` directory it must age and rotate.
+`virt-host-managed` stops only the repository-owned `virtops` libvirt network.
+It never inspects or signals Incus `dnsmasq` PIDs; Incus remains responsible
+for its managed bridge, firewall state, and network-child teardown.
+
+Waybar keeps the existing `LABWC_WAYBAR_*` values as the external/default bar
+dimensions and adds `LABWC_WAYBAR_INTERNAL_*` overrides for the internal-output
+bar. The internal family covers bar height, taskbar/tray icons, font size, menu,
+workspace, taskbar and application buttons, compact status modules, quick
+controls, and lock/power button widths and padding.
+
+`Super+M` and `Ctrl+Alt+M` open the searchable **Computer Management**
+Fuzzel launcher.
+Its folder-style categories are Container Management, Remote Desktop,
+Endpoint Security, Digital Assets, Users & Groups, Network Management, System
+Configuration, Phone Management, Backup & Recovery, and Hardware &
+Peripherals. Firewall Security is nested below Endpoint Security instead of
+competing with it at the Computer Management root. The former
+`Ctrl+Super+A`, `Ctrl+Super+N`, `Ctrl+Super+P`, and `Ctrl+Super+R` bindings are
+retired so laptops and stationary systems share one management navigation
+model. Each category can override the shared Fuzzel menu sizing through
+`LABWC_FUZZEL_<CATEGORY>_WIDTH`, `LABWC_FUZZEL_<CATEGORY>_LINES`, and
+`LABWC_FUZZEL_<CATEGORY>_FONT_SIZE`, where `<CATEGORY>` is
+`CONTAINER_MANAGEMENT`, `REMOTE_DESKTOP`, `ENDPOINT_SECURITY`,
+`DIGITAL_ASSETS`, `USERS_GROUPS`, `NETWORK_MANAGEMENT`,
+`FIREWALL_SECURITY`, `SYSTEM_CONFIGURATION`, `PHONE_MANAGEMENT`,
+`BACKUP_RECOVERY`, or `HARDWARE_PERIPHERALS`.
+
+**Network Management** and the Waybar network module's right-click action use
+the same `labwc-network-control-menu` backend. OpenVPN imports retain their
+bounded user-owned file workflow, but WireGuard imports are deliberately
+administrator-provisioned: only direct, non-symlink `*.conf` files below
+`/data/config/network/wireguard` are accepted. The desktop tmpfiles policy
+creates `/data/config/network/wireguard` as `root:devops` mode `0750`; accepted
+profiles are root-owned, at most 1 MiB, and mode `0400`, `0440`, `0600`, or
+`0640`, with group-readable profiles restricted to the `devops` group. Both
+the unprivileged client and the root helper revalidate the canonical path and
+metadata before the existing fixed-argument
+`nmcli connection import type wireguard file ...` call. No `$HOME/.config`
+WireGuard discovery, `wg-quick`, or competing resolver path is used.
+NetworkManager remains the connection and DNS owner and continues to integrate
+with the managed systemd-resolved/`resolvectl` compatibility path.
+
+**Computer Management → Digital Assets** opens DOCX, PDF, and image action
+menus. Inputs are bounded regular files chosen only from `~/Downloads`,
+`~/Documents`, and `~/Desktop`; original files are never overwritten, and
+results are created with private permissions below
+`~/Documents/Digital-Assets`. The desktop package set provides Pandoc, QPDF,
+Poppler, ExifTool with ZIP support for DOCX metadata, GraphicsMagick, libvips,
+WebP, OptiPNG, and JPEGoptim. The late-command checksum-verifies pinned
+`pdfcpu` and Typst archives, installs them below `/usr/local/lib` with fixed
+`/usr/local/bin` links, and builds the Pipx **code** environment for
+`pdf2docx` and `pymupdf4llm` with a temporary locked non-root account. Its
+Pipx state and private build home are below `/usr/local/lib/digital-assets`;
+the installer removes the build account and its state before sealing the shared
+runtime as `root:root` and non-user-writable; a non-forced account removal
+fails the install rather than sealing if the builder cannot be removed. Root
+ownership protects the shared interpreter and imported modules; it does not
+grant root execution to document actions. The launcher and action dispatcher
+reject UID 0. Conversions, temporary workspaces, and outputs therefore run as
+that logged-in user without `sudo`, `pkexec`, or setuid helpers. The action
+wrapper starts the interpreter with a minimal environment plus isolated,
+no-bytecode Python mode (`-I -B`), so it neither imports user-site packages nor
+honors Python environment overrides, and it keeps library scratch files in the
+private runtime workspace.
+Pandoc always uses Typst as its PDF engine, so this workflow does not require a
+LaTeX stack.
+
+PDF content editing creates a reflowable Markdown working copy, runs
+FocusWriter with native Wayland backends forced, and builds a new PDF with
+Pandoc plus Typst. It cannot preserve original page geometry, forms,
+signatures, annotations, or exact layout. PDF bookmark editing exports a
+private `bookmarks.json` working copy for Nano and imports it with pdfcpu into
+a new validated PDF. QDF hyperlink/typo edits use a bounded literal byte
+replacement followed by `fix-qdf` and QPDF validation; they invalidate
+signatures and do not preserve source encryption.
+
+Endpoint Security keeps selected
+file and folder operations
+unprivileged, while fixed host-wide audits and signature updates use the
+existing desktop-owned `10-pkexec.rules` policy and a root helper. System provides
+firmware, package, NVMe, Btrfs, journal, resolver, user-service, notification,
+Waybar, and external-drive maintenance alongside the existing host inspection
+actions. `Manage External Drives` inventories only USB disks and their direct
+volumes, reports mounted state, and serializes its actions within the active
+desktop session. Before unmounting, it runs a bounded `syncfs` operation for
+each mounted filesystem, revalidates the USB device identity, delegates the
+unmount to UDisks, and waits for the kernel mount table to confirm that the
+volume disappeared. Whole-drive power-off first synchronizes every mounted
+child, then cleanly unmounts and confirms every child in order, rechecks that
+none remain mounted, and only then asks UDisks to power off the parent disk.
+Any sync timeout, changed device identity, busy volume, unmount-confirmation
+timeout, or remaining mount leaves the drive powered and never triggers a
+forced or lazy unmount. The flow is filesystem-neutral, including F2FS.
+The desktop APT policy blocks the optional cramerz OBS Release during normal
+resolution, so `labwc`, `libwlroots-0.20`, and related packages come from
+Debian Forky. The archive remains configured only for explicit administrative
+selection with `package/Debian_Unstable` or `apt-get -t Debian_Unstable`; it is
+not an automatic upgrade source for the compositor stack.
+The desktop package set explicitly selects `thunar/forky`, keeping Thunar's
+native GIO/UDisks device actions on the Forky package line with the upstream
+unmount/reload crash fixes. The `usbmedia` policy names the actual UDisks2
+actions used by GIO and Thunar, including `filesystem-unmount-others`;
+nonexistent `filesystem-unmount` and obsolete `drive-eject` action names are
+rejected by target verification so a denied unmount cannot tear down the
+browsing window without completing the requested operation. The Debian
+`eject` utility remains installed for Thunar/GIO compatibility, but neither
+the native path nor the managed launcher bypasses UDisks or forces a busy
+filesystem offline.
+Disruptive firmware, upgrade, journal, and audio actions require an explicit
+second confirmation. Troubleshooting separates user-session restarts from explicitly
+confirmed root repairs for services, caches, managed zram, Btrfs chunk reclaim,
+dpkg/APT, initramfs, GRUB, and optional Timeshift snapshots. APT dependency
+repair refuses package removals, and Timeshift selects Btrfs or rsync mode from
+the installed root filesystem. Endpoint Security no longer duplicates port
+inspection or Nmap entries; those actions live under Network Management
+and use its dedicated bounded privileged helper.
+Security file actions list bounded candidates below common home directories or
+accept a manually entered absolute path. File hashing reports SHA-256 and
+SHA-512 with a 10-minute ceiling per digest, and SHA-256 verification validates
+the expected 64-character hexadecimal value before comparing it. Recursive
+folder hashing stays on the selected filesystem, skips symlinks, accepts at
+most 50,000 regular files and 100 GiB, and writes a private mode-0600 manifest
+below `~/.local/state/labwc/security-reports`.
+AppArmor is divided into Status & Events, Profile Drafts, App Modes, and
+Policy Tools. It reports kernel
+enablement, unconfined network processes, the active features ABI, recent
+complain/denied events, disabled profiles, and unknown-profile cleanup in dry
+run mode. The confirmed profile-generation flow covers `aa-easyprof`,
+`aa-autodep`, `aa-logprof`, and `aa-genprof`; easyprof writes syntax-checked,
+non-active drafts below `/var/lib/apparmor/easyprof`, while the other tools
+publish syntax-checked drafts below `/var/lib/apparmor/drafts` rather than
+editing active policy directly. Re-running those generators merges new draft
+content into the existing non-active draft when that remains valid, or replaces
+the stored draft with the newly generated syntax-checked profile when the merge
+would be invalid. logprof and genprof consume
+`/var/log/managed/apparmor/apparmor.log`, which rsyslog populates from AppArmor
+kernel and audit events. Managed applications can change enforce/complain/
+disable and audit logging with explicit confirmation. **Generate New Rules**
+is a separately confirmed root action that parses bounded `DENIED` records from
+the managed AppArmor log and maps only installed profile labels with an
+unambiguous `local/*` include. It can add owner-qualified file permissions,
+exact allowlisted low-risk capabilities, and access-qualified IPv4/IPv6 network
+rules. Both `requested_mask`/`denied_mask` and the network audit
+`requested`/`denied` field names are normalized before rule rendering.
+Conservative path normalization replaces only owner-matched home, runtime UID,
+and process-ID components; it rejects dot-segment traversal and does not invent
+arbitrary recursive wildcards. Execute transitions, link permissions without a
+reviewed source/target pair, non-allowlisted capabilities, non-IP network
+families, sensitive paths, malformed masks, unknown classes, unconfined events,
+and ambiguous profiles are reported but not granted. Generated rules are
+confined to one managed marker block below
+`/etc/apparmor.d/local/`, preserving manual content outside that block. Every
+changed source is validated in an isolated include overlay before atomic
+publication, then the exact source is reloaded; any validation, publication,
+or reload failure restores the previous local include and reloads the restored
+policy. The root-only transaction directory is provisioned by tmpfiles; the
+generator fails closed rather than writing elsewhere below `/var/lib/apparmor`
+when that directory is unavailable.
+
+The App Modes menu also provides direct Enforce, Complain, and Disable toggles
+for managed applications. Individual application-mode changes affect only the
+selected application profiles. The global desktop-state action changes every
+profile source declared in `/etc/apparmor/managed-modes.conf` together, using
+the same complete set owned by `DESKTOP_APPARMOR_STATE`. Reloading the managed
+modes clears temporary audit flags, while service-wide reloads remain
+separately confirmed.
+Draft maintenance lists and validates stored drafts without invoking `pkexec`.
+**Activate Selected Draft** applies only the
+explicitly selected root-owned draft after another syntax check.
+Existing target profiles must retain the same parsed profile-label set and are
+backed up below `/var/lib/apparmor/backup/`; activation failures restore and
+reload the previous source automatically. New profile files are loaded using
+the mode declared in their draft, while repository-managed profiles are
+reconciled back to their configured mode. Activated drafts persist on that
+installed host, but their required policy changes must still be incorporated
+into the repository-managed source to survive a reinstall.
+The shared fwupd refresh drop-in treats upstream exit statuses `2` and `101`
+as successful no-op outcomes, preventing current metadata or unsupported
+hardware from leaving `fwupd-refresh.service` failed. The daemon ordering
+drop-in places `fwupd.service` after `upower.service`, so shutdown reverses the
+dependency and stops fwupd before UPower when both services are active.
+ClamAV status, file scans, and recursive folder scans run as the logged-in
+desktop user, never follow symlinks or cross filesystems, and remain
+report-only: infected files are not moved or deleted. File scans have a
+15-minute ceiling, folder scans have a 45-minute ceiling, and the launcher
+rejects regular files above the managed 512 MiB per-file limit instead of
+silently skipping them. Official FreshClam data plus the SaneSecurity and
+URLhaus providers managed by Fangfrisch update once a day through
+`managed-clamav-signature-update.timer`; the vendor FreshClam daemon and
+Fangfrisch timer are masked to prevent competing schedules.
+
+**Computer Management → Network Management → Network Scanning** opens the
+five-category scanner. Packet capture is delegated to
+Debian's `wireshark` group through the package-managed
+`dumpcap` capabilities, and only the primary desktop account is enrolled
+automatically. Wireshark and TShark remain non-setuid and capability-free;
+Nmap, Wireshark, Dumpcap, tcpdump, and TShark use the same folder-style
+top-level icon as the three maintenance categories.
+The Nmap category also owns listening TCP/UDP port inspection plus localhost,
+LAN, specific LAN host, and explicitly authorized WAN host scans.
+Wireshark can launch normally, while the managed `Open Capture` action accepts
+only managed captures. Dumpcap, tcpdump, and TShark captures are
+time/count/size bounded and stored privately below
+`~/Captures/network-scanning`. Privileged tcpdump and Nmap actions require the
+active desktop administrator through pkexec. Nmap actions use conservative
+packet rates, per-host and per-script ceilings, and whole-command timeouts.
+They accept RFC1918 or loopback hosts and `/24` through `/32` private CIDRs,
+plus explicitly authorized public WAN IPv4 hosts. Public CIDRs and
+protocol-assignment, shared, link-local, relay-anycast, benchmark,
+documentation, multicast, or reserved destinations are rejected. The
+approved-service check uses separate range-aware TCP and UDP catalogs covering
+common infrastructure, directory, messaging, storage, observability, database,
+virtualization, VPN, and application service ports. Lua 5.5 is installed
+explicitly, and target verification parses every managed NSE script with
+`luac5.5`.
+
+**Computer Management → Phone Management** opens the Android Debug Bridge
+launcher. The desktop late-command downloads Google's current Linux
+Platform-Tools archive directly over HTTPS,
+applies compressed/extracted size and member-count ceilings, rejects unsafe
+paths and unsupported extracted node types, validates the required x86-64
+payload, records revision and SHA-256 provenance, installs the full bundle
+under `/usr/local/lib/android-sdk/platform-tools`, and links `adb` and
+`fastboot` from `/usr/local/bin`. Installation does not invoke `adb`; the
+per-user server remains stopped until **Start ADB Server** is selected. The
+managed user unit permits Unix, IPv4, IPv6, and netlink sockets so the Google
+daemon and libusb can monitor Android USB device changes. Menu selections,
+bounded action outcomes and exceptions, daemon output, and systemd lifecycle
+messages are routed to `/var/log/managed/adb/adb.log`; the generic Fuzzel logs
+retain the same normalized menu and action audit events.
+action helper detects and repairs an already-running hung current-user server,
+waits for a selected serial to reconnect, requests offline transport reconnects,
+and reports permission, offline, and RSA authorization problems explicitly.
+The launcher covers server lifecycle, device inspection and shell access,
+files/APKs, diagnostics and captures, wireless debugging, port forwarding,
+confirmed reboot modes, and non-flashing fastboot inspection/reboot actions.
+The primary desktop account is added to `plugdev`, and
+`51-android-debug-bridge.rules` covers common OEM and chipset IDs only when an
+Android debug, fastboot, or legacy debug USB interface is present. Preseed
+stages the rule file but does not try to reload, exercise, or validate udev
+device behavior inside the installer.
+The Reboot & Recovery submenu adds **Backup Device** plus official Samsung
+firmware download and flash actions. Backups are built atomically below
+`~/Android/adb/backups` with private permissions and contain ADB-readable shared
+storage, device/package/settings metadata, integrity hashes, a bugreport when
+available, and a legacy Android Backup archive when the deprecated protocol is
+still supported. They cannot capture app-private data that production Android
+does not expose through ADB, hardware-backed keys, or protected partitions.
+
+The desktop role pins the official samloader-rs 2.0.0 Linux x86-64 archive and
+release SHA-256, validates its archive shape, ELF architecture, and version,
+and installs it below `/usr/local/lib/samloader` with a managed
+`/usr/local/bin/samloader` link. Downloads must match the connected Samsung
+model, are decrypted and safely extracted under
+`~/Android/adb/samsung-firmware`, and receive MD5, SHA-256, and provenance
+validation. Flashing accepts only those managed directories, rechecks the
+device model and components, requires exactly one supported Samsung Download
+Mode USB device, and uses a typed confirmation. **Keep Data** supplies
+`HOME_CSC_*.tar.md5`; **Factory Reset** supplies `CSC_*.tar.md5` and erases
+device data. The managed udev rule grants access only to the Samsung Download
+Mode product IDs supported by samloader-rs 2.0.0.
+
+**Computer Management → Remote Desktop** opens the managed RDP frontend.
+**Computer Management** is the only searchable management application; the
+remote-desktop compatibility entry remains hidden for MIME associations. The
+managed `freerdp-sdl` launcher resolves the staged SDL client as `sdl-freerdp` or the
+older `sdl-freerdp3` compatibility binary, supports direct or explicitly shared-folder
+connections, and exposes fixed, dynamic, full-screen, and multi-monitor display
+choices. Dynamic windows use FreeRDP dynamic resolution without the mutually
+exclusive smart-sizing flag. The launcher also supports optional device
+redirection, private saved connection metadata, and explicit unreachable-target
+diagnostics. The launcher requires the Labwc Wayland session, forces SDL's
+Wayland backend, and removes the X11 display fallback from the client
+environment. Passwords are never written to the saved connection store and are
+requested through `FREERDP_ASKPASS` by a root-owned masked GTK askpass helper.
+The default certificate policy leaves `/cert` unset so the SDL3 client presents
+the remote server certificate with temporary trust, permanent trust, and cancel
+choices. Strict profiles add `/cert:deny`. The launcher does not generate a
+local RDP certificate or key and does not maintain a separate TOFU certificate
+cache or reset path; permanent approvals remain owned by FreeRDP in the user's
+configuration.
+
+Taskwarrior and `taskwarrior-tui` share
+`~/.config/task/taskrc`, store task data in `~/.local/share/task`, and expose
+managed Pending, In Progress, and Completed reports with desktop-aligned colors.
+Taskwarrior remains available from the application launcher and managed
+terminal without occupying permanent Waybar space. Waybar places the Wayscriber
+glyph directly after `ext/workspaces` and before the apps drawer, toggling the
+overlay through the session-bound daemon helper. The vendor user service is
+attached to `labwc-session.target`, conditioned on the active Wayland session,
+restarted with bounded backoff, and run without its tray integration. The
+drawer exposes Font Awesome glyphs for Foot, Thunar, Tuta Mail, FeatherPad, and
+Sleek without loading native application icon assets. Tuta Mail and Sleek use
+the managed `NvidiaAccelerated` launch mode; Foot, Thunar, and FeatherPad retain
+their direct desktop commands. Tuta's persistent sandbox sees the managed
+primary-user `mimeapps.list` read-only so it can confirm the default mail
+handler correctly. Liferea is installed as the managed feed reader,
+uses the system browser, and owns the RSS, Atom, RDF, and `feed:` MIME handlers.
+
+Waypaper uses its selector-only backend and stores validated selections from
+`/usr/share/backgrounds/desktop` in `~/.local/state/labwc/wallpaper`. Its
+post-command restarts the single systemd-owned `swaybg.service` instance only
+while `labwc-session.target` is active, so Waypaper never owns or kills a
+separate swaybg process. The service automatically restarts only after an
+unexpected failure. Labwc restores the saved PNG or JPEG on login and uses the
+managed default whenever the state is absent or invalid.
+
+Thunar uses the next supported icon and zoom step for its icon, details, compact,
+shortcuts, and tree views; unsupported pixel-level GTK icon overrides are not
+used.
+
+Managed application launchers live in the primary account's user-owned
+`~/.local/share/applications` tree and are published with atomic replacement.
+All managed home directories are mode `0700`; non-executable regular files,
+including `~/.config/mimeapps.list` and generated desktop entries, are mode
+`0600`, while owner-executable helpers remain mode `0700`. The login profile,
+systemd user manager, and shadow account policy all use umask `0077`, and the
+final finish-install hook reapplies this metadata-only policy across the fresh
+account home after every late-command addon has finished.
+This keeps Vivaldi's desktop-entry refresh writable, seeds private Vivaldi
+profile/cache directories, and gives managed applications an explicit Debian
+fontconfig path. Direct legacy Tuta AppRun launchers are removed so Tuta always
+starts through the managed `/opt/tuta-mail/AppRun` sandbox contract. The
+root-owned AppDir remains traversable at mode `0755`, including after managed
+updates and interrupted-publication recovery. Every Tuta launch mode receives
+the filtered session-bus allowlist for desktop portals, notifications, and
+KWallet Secret Service names, but no system-bus socket. It also receives the
+outer-sandbox-compatible `--no-sandbox` argument. Publication normalizes every
+AppDir directory to mode `0755`, preserves root-only writes, and removes unused
+set-ID bits.
+Obsidian prefers the package-owned `/usr/bin/obsidian` launcher when it exists
+so bundled runtime libraries resolve correctly, while `/opt/Obsidian/obsidian`
+remains the validated payload anchor for managed publication. Native Wayland
+normal, Intel, and NVIDIA desktop actions are preserved. When `addon/software`
+is selected on `amd64`,
+Postman is archive-validated and atomically published below `/opt/postman`; its
+system launcher uses `/opt/postman/app/resources/app/assets/icon.png` from the
+downloaded bundle and routes normal, Intel, and NVIDIA launches through
+`/opt/postman/app/Postman`. Sleek `2.0.26` is installed as its pinned amd64
+Debian package with `/opt/sleek/sleek` as the validated payload anchor, but
+its managed launcher prefers the package-owned `/usr/bin/sleek` helper when it
+is present. Filen uses the same launcher preference for `/usr/bin/{filen,filen-desktop}`
+before falling back to `/opt/Filen/Filen`, and Telegram bootstraps its private
+state tree under `~/.local/share/TelegramDesktop` before the vendor process
+opens its session logs. KeePassXC likewise repairs its user-owned
+`~/.config/keepassxc/keepassxc.ini` seed before the no-network AppArmor path
+starts the database-scoped GUI.
+Neither app exposes a PurePrivacy action because hiding user-selected API or
+todo files would make that mode misleading. Chromium, Microsoft Edge, and
+Vivaldi receive seeded system-frame preferences. Obsidian's global registry
+receives `frame=native`, an empty vault registry, and no pre-approved external
+URI schemes. A private default vault is staged at
+`~/Syncthing/obsidian-md` and copied into the primary account; later accounts
+receive the same tree through normal `/etc/skel` account creation. The runtime
+launcher never reads the skeleton. Before Obsidian starts, it validates the installed
+user-owned home vault and registry, derives a
+deterministic 16-character vault identifier from the absolute path, preserves
+other vaults, and atomically registers the managed vault. The vault enables the
+safe built-in file, search, graph, Canvas, backlink, properties, daily-note,
+template, bookmark, outline, Bases, and recovery workflows while keeping
+community plugins, Publish, Obsidian Sync, Web viewer, slides, and audio
+recording disabled. A scoped Syncthing `.stignore` excludes only Obsidian's
+per-device `workspace*.json` layout files. The local `evergreen-notes` theme
+and `managed-ux` snippet provide managed light and dark palettes, Noto
+typography, accessible focus, reduced-motion behavior, print styling, and
+consistent editor, navigation, graph, Canvas, code, table, tag, and callout UX.
+Visual Studio Code receives
+`window.titleBarStyle=native`, `chat.disableAIFeatures=true`, a built-in dark
+theme with managed workbench, terminal, syntax, and semantic-token colors, and
+privacy, workspace-trust, file, editor, and UX defaults. Its bundled Copilot
+extensions therefore stay disabled and do not provision `~/.copilot`. Filen
+does not expose a persistent native-frame preference, so its decoration
+contract is enforced by the managed
+Chromium feature flags and Labwc's server-decoration rule. Those settings
+disable Chromium's decoration fallback, but Filen's vendor UI hardcodes its own
+window controls; removing them would require modifying the Filen application
+rather than a supported configuration file. All managed
+Chromium/Electron launches
+disable the `WaylandWindowDecorations` client-side fallback, while the Labwc session exports
+`QT_WAYLAND_DISABLE_WINDOWDECORATION=1` and `GTK_CSD=0` for compositor-owned
+Qt and GTK decorations.
+
+When `addon/software` is selected on `amd64`, Ledger Wallet (Ledger Live) is
+downloaded from `https://download.live.ledger.com/latest/linux` and resolved
+against Ledger's official stable Linux metadata. The installer verifies the
+pinned Ledger public key, Ledger's signature over the release SHA-512 manifest,
+the metadata digest and size, the x86-64 AppImage framing, and the extracted desktop version before publishing a
+root-owned `/opt/ledger-live` AppDir. Only the verified Chromium sandbox is
+installed setuid-root; the managed launcher keeps the sandbox enabled, uses
+native Wayland and KWallet, and does not expose a non-functional PurePrivacy
+action. `53-ledger-wallet.rules` covers Ledger Stax and other current Ledger
+devices with `plugdev` plus active-seat `uaccess` at `0660`, including
+firmware-update re-enumeration, without making hidraw world-writable.

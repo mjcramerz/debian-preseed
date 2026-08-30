@@ -1,0 +1,554 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+LANG=C.UTF-8
+LC_ALL=C.UTF-8
+TZ=UTC
+LIBVIRT_AUTOSTART=0
+export LANG LC_ALL LIBVIRT_AUTOSTART PATH TZ
+
+CONFIG_FILE=/etc/default/virt-host-managed
+LIBVIRT_NETWORK_XML=/etc/libvirt/managed/virtops-network.xml
+LIBVIRT_NETWORK_URI=qemu:///system
+MODE=${1:-}
+
+log() {
+  printf '[virt-host-managed] %s\n' "$*" >&2
+}
+
+fatal() {
+  log "fatal: $*"
+  exit 1
+}
+
+case "$MODE" in
+  ''|--prepare-install|--shutdown|--validate-config) ;;
+  *) fatal "unsupported mode: ${MODE}" ;;
+esac
+
+validate_abs_path() {
+  label=$1
+  value=$2
+  case "$value" in
+    /*) ;;
+    *) fatal "$label must be an absolute path: ${value:-unset}" ;;
+  esac
+  case "$value" in
+    /|*..*|*//*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/@%:+,-]*)
+      fatal "$label contains unsupported path syntax: $value"
+      ;;
+  esac
+}
+
+validate_root_owned_regular_file() {
+  label=$1
+  value=$2
+  expected_mode=$3
+
+  validate_abs_path "$label" "$value"
+  [ -f "$value" ] && [ ! -L "$value" ] && [ -r "$value" ] ||
+    fatal "$label is unavailable or indirect: ${value}"
+  value_real=$(readlink -f -- "$value") ||
+    fatal "cannot resolve $label: ${value}"
+  [ "$value_real" = "$value" ] ||
+    fatal "$label must not traverse symlinks: ${value}"
+  value_owner=$(stat -c '%u' -- "$value") ||
+    fatal "cannot inspect $label ownership"
+  value_mode=$(stat -c '%a' -- "$value") ||
+    fatal "cannot inspect $label mode"
+  [ "$value_owner:$value_mode" = "0:${expected_mode}" ] ||
+    fatal "$label must be root-owned mode ${expected_mode}: ${value}"
+}
+
+validate_simple_name() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-]*)
+      fatal "$label contains unsupported characters: ${value:-unset}"
+      ;;
+  esac
+}
+
+validate_managed_libvirt_network_identity() {
+  network_name=$1
+  bridge_name=$2
+  incus_bridge_name=$3
+  tailscale_interface=$4
+
+  [ "$network_name" != default ] ||
+    fatal "managed libvirt network must not reuse the package-owned default network"
+  [ "$bridge_name" != virbr0 ] ||
+    fatal "managed libvirt network must not reuse the package-owned virbr0 bridge"
+  [ "$bridge_name" != lxcbr0 ] ||
+    fatal "managed libvirt network must not reuse the package-owned lxcbr0 bridge"
+  [ "$bridge_name" != "$incus_bridge_name" ] ||
+    fatal "managed libvirt bridge must not collide with the Incus bridge: ${bridge_name}"
+  [ "$bridge_name" != "$tailscale_interface" ] ||
+    fatal "managed libvirt bridge must not collide with the Tailscale interface: ${bridge_name}"
+  [ "${#bridge_name}" -le 15 ] ||
+    fatal "managed libvirt bridge exceeds the Linux interface-name limit: ${bridge_name}"
+}
+
+validate_managed_libvirt_network_xml() {
+  network_xml=$1
+  network_name=$2
+  bridge_name=$3
+  network_address=$4
+  network_netmask=$5
+  dhcp_start=$6
+  dhcp_end=$7
+
+  validate_root_owned_regular_file "managed libvirt network XML" "$network_xml" 644
+  [ "$(grep -Ec '^[[:space:]]*<network>[[:space:]]*$' "$network_xml")" -eq 1 ] ||
+    fatal "managed libvirt network XML must define exactly one network"
+  [ "$(grep -Ec '^[[:space:]]*<name>[^<]+</name>[[:space:]]*$' "$network_xml")" -eq 1 ] ||
+    fatal "managed libvirt network XML must define exactly one network name"
+  grep -Eq "^[[:space:]]*<name>${network_name}</name>[[:space:]]*$" "$network_xml" ||
+    fatal "managed libvirt network XML name does not match ${network_name}"
+  grep -Eq "^[[:space:]]*<forward mode=['\"]nat['\"]/>[[:space:]]*$" "$network_xml" ||
+    fatal "managed libvirt network XML must use NAT forwarding"
+  grep -Eq "^[[:space:]]*<bridge name=['\"]${bridge_name}['\"] stp=['\"]on['\"] delay=['\"]0['\"]/>[[:space:]]*$" "$network_xml" ||
+    fatal "managed libvirt network XML bridge does not match ${bridge_name}"
+  grep -Eq "^[[:space:]]*<ip address=['\"]${network_address}['\"] netmask=['\"]${network_netmask}['\"]>[[:space:]]*$" "$network_xml" ||
+    fatal "managed libvirt network XML address or netmask is incorrect"
+  grep -Eq "^[[:space:]]*<range start=['\"]${dhcp_start}['\"] end=['\"]${dhcp_end}['\"]/>[[:space:]]*$" "$network_xml" ||
+    fatal "managed libvirt network XML DHCP range is incorrect"
+}
+
+validate_port() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[!0-9]*)
+      fatal "$label must be a numeric TCP/UDP port: ${value:-unset}"
+      ;;
+  esac
+  [ "$value" -ge 1 ] && [ "$value" -le 65535 ] ||
+    fatal "$label must be in range 1..65535: ${value}"
+}
+
+validate_non_negative_integer() {
+  label=$1
+  value=$2
+  case "$value" in
+    ''|*[!0-9]*)
+      fatal "$label must be a non-negative integer: ${value:-unset}"
+      ;;
+  esac
+}
+
+validate_positive_integer() {
+  label=$1
+  value=$2
+  validate_non_negative_integer "$label" "$value"
+  [ "$value" -ge 1 ] ||
+    fatal "$label must be greater than zero"
+}
+
+validate_ipv4_address() {
+  label=$1
+  value=$2
+
+  case "$value" in
+    ''|*[!0-9.]*|.*|*.|*..*)
+      fatal "$label must be an IPv4 dotted-quad address: ${value:-unset}"
+      ;;
+  esac
+
+  old_ifs=$IFS
+  IFS=.
+  # shellcheck disable=SC2086
+  set -- $value
+  IFS=$old_ifs
+  [ "$#" -eq 4 ] || fatal "$label must contain four IPv4 octets: ${value}"
+
+  for octet in "$@"; do
+    case "$octet" in
+      ''|*[!0-9]*)
+        fatal "$label contains a non-numeric IPv4 octet: ${value}"
+        ;;
+    esac
+    [ "$octet" -ge 0 ] && [ "$octet" -le 255 ] ||
+      fatal "$label contains an out-of-range IPv4 octet: ${value}"
+  done
+}
+
+validate_https_bind_address() {
+  label=$1
+  value=$2
+
+  case "$value" in
+    ''|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.:\[\]-]*|*[[:space:]]*)
+      fatal "$label contains unsupported bind syntax: ${value:-unset}"
+      ;;
+  esac
+
+  port=${value##*:}
+  [ "$port" != "$value" ] || fatal "$label must include a TCP port: ${value}"
+  validate_port "${label} port" "$port"
+}
+
+wait_for_ready_command() {
+  label=$1
+  wait_seconds=$2
+  retry_delay=$3
+  shift 3
+  deadline=$(( $(date +%s) + wait_seconds ))
+
+  while :; do
+    if "$@" >/dev/null 2>&1; then
+      log "$label is ready"
+      return 0
+    fi
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    log "$label is not ready yet; retrying in ${retry_delay}s"
+    sleep "$retry_delay"
+  done
+
+  fatal "$label did not become ready within ${wait_seconds}s"
+}
+
+stop_managed_libvirt_network() {
+  network_name=$1
+  all_networks=
+  active_networks=
+
+  all_networks=$(virsh -c "$LIBVIRT_NETWORK_URI" net-list --all --name) ||
+    fatal "could not enumerate libvirt networks before shutdown"
+  if ! printf '%s\n' "$all_networks" | grep -Fqx "$network_name"; then
+    log "managed libvirt network ${network_name} is absent during shutdown"
+    return 0
+  fi
+
+  active_networks=$(virsh -c "$LIBVIRT_NETWORK_URI" net-list --name) ||
+    fatal "could not enumerate active libvirt networks before shutdown"
+  if ! printf '%s\n' "$active_networks" | grep -Fqx "$network_name"; then
+    log "managed libvirt network ${network_name} is already inactive"
+    return 0
+  fi
+
+  virsh -c "$LIBVIRT_NETWORK_URI" net-destroy "$network_name" >/dev/null ||
+    fatal "could not stop managed libvirt network ${network_name}"
+  active_networks=$(virsh -c "$LIBVIRT_NETWORK_URI" net-list --name) ||
+    fatal "could not verify libvirt network state after shutdown"
+  ! printf '%s\n' "$active_networks" | grep -Fqx "$network_name" ||
+    fatal "managed libvirt network ${network_name} remained active after shutdown"
+  log "stopped managed libvirt network ${network_name}"
+}
+
+shutdown_managed_virtualization() {
+  stop_managed_libvirt_network "$VIRT_LIBVIRT_NETWORK_NAME"
+  # Incus owns its managed bridge, firewall state, and dnsmasq child. Do not
+  # inspect Incus PID files or signal package-owned processes from this unit.
+  log "completed managed libvirt network shutdown; Incus retains its own teardown"
+}
+
+write_managed_lxc_conf() {
+  target_path=/etc/lxc/lxc.conf
+  begin_marker='# BEGIN managed virtualization path'
+  end_marker='# END managed virtualization path'
+  tmp_file=$(mktemp /tmp/virt-host-lxc.XXXXXX)
+  tmp_new="${tmp_file}.new"
+
+  if [ -r "$target_path" ]; then
+    awk -v begin="$begin_marker" -v end="$end_marker" '
+      $0 == begin { skip = 1; next }
+      $0 == end { skip = 0; next }
+      !skip { print }
+    ' "$target_path" >"$tmp_file"
+  else
+    : >"$tmp_file"
+  fi
+
+  {
+    cat "$tmp_file"
+    printf '%s\n' "$begin_marker"
+    printf 'lxc.lxcpath = %s\n' "$VIRT_LXC_PATH"
+    printf '%s\n' 'lxc.default_config = /etc/lxc/default.conf'
+    printf '%s\n' "$end_marker"
+  } >"$tmp_new"
+
+  install -d -m 0755 /etc/lxc
+  install -m 0644 "$tmp_new" "$target_path"
+  rm -f "$tmp_file" "$tmp_new"
+}
+
+validate_lxc_storage_filesystem() {
+  command -v findmnt >/dev/null 2>&1 ||
+    fatal "findmnt is required to validate the LXC storage filesystem"
+
+  lxc_storage_fstype=$(findmnt --noheadings --output FSTYPE --target "$VIRT_LXC_PATH" 2>/dev/null | sed -n '1{s/[[:space:]]//g;p;}')
+  [ -n "$lxc_storage_fstype" ] ||
+    fatal "could not determine the filesystem type backing ${VIRT_LXC_PATH}"
+
+  case "$lxc_storage_fstype" in
+    fuse|fuse.*|fuseblk|fuseblk.*)
+      fatal "LXC storage must use a native kernel filesystem, not ${lxc_storage_fstype}: ${VIRT_LXC_PATH}"
+      ;;
+  esac
+
+  log "validated native LXC storage filesystem path=${VIRT_LXC_PATH} fstype=${lxc_storage_fstype}"
+}
+
+validate_existing_lxc_rootfs_backends() {
+  lxc_config_list=$(mktemp /tmp/virt-host-lxc-configs.XXXXXX)
+  lxc_fuse_config=
+  find "$VIRT_LXC_PATH" -mindepth 2 -maxdepth 2 -type f -name config -print >"$lxc_config_list"
+
+  while IFS= read -r lxc_container_config; do
+    [ -n "$lxc_container_config" ] || continue
+    lxc_rootfs_path=$(sed -n 's/^[[:space:]]*lxc\.rootfs\.path[[:space:]]*=[[:space:]]*//p' "$lxc_container_config" | tail -n 1)
+    case "$lxc_rootfs_path" in
+      fuse:*|fuse.*:*|fuse-overlayfs:*)
+        lxc_fuse_config=$lxc_container_config
+        break
+        ;;
+    esac
+  done <"$lxc_config_list"
+
+  rm -f "$lxc_config_list"
+  [ -z "$lxc_fuse_config" ] ||
+    fatal "LXC container config uses a prohibited FUSE rootfs backend: ${lxc_fuse_config}"
+}
+
+ensure_libvirt_network() {
+  network_xml=$1
+  network_name=$2
+  bridge_name=$3
+  network_address=$4
+  network_netmask=$5
+  dhcp_start=$6
+  dhcp_end=$7
+  existing_network_xml=
+  existing_bridge=
+  existing_address=
+  existing_netmask=
+  existing_dhcp_start=
+  existing_dhcp_end=
+
+  if virsh -c "$LIBVIRT_NETWORK_URI" net-info "$network_name" >/dev/null 2>&1; then
+    existing_network_xml=$(virsh -c "$LIBVIRT_NETWORK_URI" net-dumpxml "$network_name" 2>/dev/null || true)
+    [ -n "$existing_network_xml" ] ||
+      fatal "libvirt network ${network_name} exists but its XML could not be read"
+    printf '%s\n' "$existing_network_xml" | grep -Eq "<forward[[:space:]]+mode=['\"]nat['\"]" ||
+      fatal "libvirt network ${network_name} is not configured in managed NAT mode"
+    existing_bridge=$(printf '%s\n' "$existing_network_xml" | sed -n "s/.*<bridge name=['\"]\\([^'\"]*\\)['\"].*/\\1/p" | sed -n '1p')
+    existing_address=$(printf '%s\n' "$existing_network_xml" | sed -n "s/.*<ip address=['\"]\\([^'\"]*\\)['\"] netmask=['\"]\\([^'\"]*\\)['\"].*/\\1/p" | sed -n '1p')
+    existing_netmask=$(printf '%s\n' "$existing_network_xml" | sed -n "s/.*<ip address=['\"]\\([^'\"]*\\)['\"] netmask=['\"]\\([^'\"]*\\)['\"].*/\\2/p" | sed -n '1p')
+    existing_dhcp_start=$(printf '%s\n' "$existing_network_xml" | sed -n "s/.*<range start=['\"]\\([^'\"]*\\)['\"] end=['\"]\\([^'\"]*\\)['\"].*/\\1/p" | sed -n '1p')
+    existing_dhcp_end=$(printf '%s\n' "$existing_network_xml" | sed -n "s/.*<range start=['\"]\\([^'\"]*\\)['\"] end=['\"]\\([^'\"]*\\)['\"].*/\\2/p" | sed -n '1p')
+
+    [ "$existing_bridge" = "$bridge_name" ] ||
+      fatal "libvirt network ${network_name} already uses bridge ${existing_bridge:-unknown}, expected ${bridge_name}"
+    [ "$existing_address" = "$network_address" ] ||
+      fatal "libvirt network ${network_name} already uses address ${existing_address:-unknown}, expected ${network_address}"
+    [ "$existing_netmask" = "$network_netmask" ] ||
+      fatal "libvirt network ${network_name} already uses netmask ${existing_netmask:-unknown}, expected ${network_netmask}"
+    [ "$existing_dhcp_start" = "$dhcp_start" ] ||
+      fatal "libvirt network ${network_name} already uses DHCP start ${existing_dhcp_start:-unknown}, expected ${dhcp_start}"
+    [ "$existing_dhcp_end" = "$dhcp_end" ] ||
+      fatal "libvirt network ${network_name} already uses DHCP end ${existing_dhcp_end:-unknown}, expected ${dhcp_end}"
+  else
+    virsh -c "$LIBVIRT_NETWORK_URI" net-define "$network_xml" >/dev/null ||
+      fatal "could not define managed libvirt network ${network_name}"
+  fi
+  if ! virsh -c "$LIBVIRT_NETWORK_URI" net-list --name | grep -Fqx "$network_name"; then
+    virsh -c "$LIBVIRT_NETWORK_URI" net-start "$network_name" >/dev/null ||
+      fatal "could not start managed libvirt network ${network_name}"
+  fi
+  virsh -c "$LIBVIRT_NETWORK_URI" net-autostart "$network_name" >/dev/null
+  virsh -c "$LIBVIRT_NETWORK_URI" net-list --name | grep -Fqx "$network_name" ||
+    fatal "managed libvirt network ${network_name} is inactive after reconciliation"
+}
+
+ensure_incus_initialized() {
+  pool_name=$1
+  pool_path=$2
+  bridge_name=$3
+  bridge_ipv4=$4
+  bridge_ipv6=$5
+  https_address=$6
+  existing_source=
+
+  if incus --force-local storage show "$pool_name" >/dev/null 2>&1; then
+    existing_source=$(incus --force-local storage show "$pool_name" | sed -n 's/^  source: //p' | sed -n '1p')
+    [ "$existing_source" = "$pool_path" ] ||
+      fatal "Incus storage pool ${pool_name} already exists at ${existing_source:-unknown}, expected ${pool_path}"
+    incus --force-local profile show default | grep -F "network: ${bridge_name}" >/dev/null ||
+      fatal "Incus default profile is missing expected network ${bridge_name}"
+    incus --force-local profile show default | grep -F "pool: ${pool_name}" >/dev/null ||
+      fatal "Incus default profile is missing expected root pool ${pool_name}"
+    current_https_address=$(incus --force-local config get core.https_address 2>/dev/null || true)
+    if [ "$current_https_address" != "$https_address" ]; then
+      incus --force-local config set core.https_address "$https_address"
+      current_https_address=$(incus --force-local config get core.https_address 2>/dev/null || true)
+      [ "$current_https_address" = "$https_address" ] ||
+        fatal "Incus core.https_address drifted from ${https_address}: ${current_https_address:-unset}"
+    fi
+    [ -r /opt/incus/ui/index.html ] ||
+      fatal "incus-ui-canonical is missing its UI payload under /opt/incus/ui"
+    log "Incus storage pool ${pool_name} already exists and matches managed defaults"
+    return 0
+  fi
+
+  seed_input_option=pre
+  seed_input_option="${seed_input_option}seed"
+  cat <<EOF | incus --force-local admin init "--${seed_input_option}" >/dev/null
+config:
+  core.https_address: ${https_address}
+storage_pools:
+- name: ${pool_name}
+  driver: dir
+  config:
+    source: ${pool_path}
+networks:
+- name: ${bridge_name}
+  type: bridge
+  config:
+    ipv4.address: ${bridge_ipv4}
+    ipv6.address: ${bridge_ipv6}
+profiles:
+- name: default
+  description: Default Incus profile
+  config: {}
+  devices:
+    eth0:
+      name: eth0
+      network: ${bridge_name}
+      type: nic
+    root:
+      path: /
+      pool: ${pool_name}
+      type: disk
+EOF
+
+  incus --force-local storage show "$pool_name" | grep -F "source: ${pool_path}" >/dev/null
+  incus --force-local profile show default | grep -F "network: ${bridge_name}" >/dev/null
+  incus --force-local profile show default | grep -F "pool: ${pool_name}" >/dev/null
+  incus --force-local config get core.https_address | grep -Fx "${https_address}" >/dev/null
+  [ -r /opt/incus/ui/index.html ] ||
+    fatal "incus-ui-canonical is missing its UI payload under /opt/incus/ui"
+}
+
+[ -r "$CONFIG_FILE" ] || fatal "managed virtualization config is missing: $CONFIG_FILE"
+# shellcheck disable=SC1090,SC1091
+. "$CONFIG_FILE"
+
+if [ "$MODE" = --shutdown ]; then
+  : "${VIRT_LIBVIRT_NETWORK_NAME:?VIRT_LIBVIRT_NETWORK_NAME must be set}"
+  validate_simple_name VIRT_LIBVIRT_NETWORK_NAME "$VIRT_LIBVIRT_NETWORK_NAME"
+  [ "$VIRT_LIBVIRT_NETWORK_NAME" != default ] ||
+    fatal "managed libvirt network must not reuse the package-owned default network"
+  shutdown_managed_virtualization
+  exit 0
+fi
+
+: "${VIRT_INCUS_POOL_NAME:?VIRT_INCUS_POOL_NAME must be set}"
+: "${VIRT_INCUS_POOL_PATH:?VIRT_INCUS_POOL_PATH must be set}"
+: "${VIRT_INCUS_BRIDGE_NAME:?VIRT_INCUS_BRIDGE_NAME must be set}"
+: "${VIRT_INCUS_BRIDGE_IPV4:?VIRT_INCUS_BRIDGE_IPV4 must be set}"
+: "${VIRT_INCUS_BRIDGE_IPV6:?VIRT_INCUS_BRIDGE_IPV6 must be set}"
+: "${VIRT_INCUS_HTTPS_ADDRESS:?VIRT_INCUS_HTTPS_ADDRESS must be set}"
+: "${VIRT_LXC_PATH:?VIRT_LXC_PATH must be set}"
+: "${VIRT_TAILSCALE_INTERFACE:?VIRT_TAILSCALE_INTERFACE must be set}"
+: "${VIRT_LIBVIRT_NETWORK_NAME:?VIRT_LIBVIRT_NETWORK_NAME must be set}"
+: "${VIRT_LIBVIRT_NETWORK_BRIDGE:?VIRT_LIBVIRT_NETWORK_BRIDGE must be set}"
+: "${VIRT_LIBVIRT_NETWORK_ADDRESS:?VIRT_LIBVIRT_NETWORK_ADDRESS must be set}"
+: "${VIRT_LIBVIRT_NETWORK_NETMASK:?VIRT_LIBVIRT_NETWORK_NETMASK must be set}"
+: "${VIRT_LIBVIRT_NETWORK_DHCP_START:?VIRT_LIBVIRT_NETWORK_DHCP_START must be set}"
+: "${VIRT_LIBVIRT_NETWORK_DHCP_END:?VIRT_LIBVIRT_NETWORK_DHCP_END must be set}"
+
+validate_simple_name VIRT_INCUS_POOL_NAME "$VIRT_INCUS_POOL_NAME"
+validate_abs_path VIRT_INCUS_POOL_PATH "$VIRT_INCUS_POOL_PATH"
+validate_simple_name VIRT_INCUS_BRIDGE_NAME "$VIRT_INCUS_BRIDGE_NAME"
+validate_abs_path VIRT_LXC_PATH "$VIRT_LXC_PATH"
+validate_simple_name VIRT_TAILSCALE_INTERFACE "$VIRT_TAILSCALE_INTERFACE"
+validate_simple_name VIRT_LIBVIRT_NETWORK_NAME "$VIRT_LIBVIRT_NETWORK_NAME"
+validate_simple_name VIRT_LIBVIRT_NETWORK_BRIDGE "$VIRT_LIBVIRT_NETWORK_BRIDGE"
+validate_managed_libvirt_network_identity \
+  "$VIRT_LIBVIRT_NETWORK_NAME" \
+  "$VIRT_LIBVIRT_NETWORK_BRIDGE" \
+  "$VIRT_INCUS_BRIDGE_NAME" \
+  "$VIRT_TAILSCALE_INTERFACE"
+validate_ipv4_address VIRT_LIBVIRT_NETWORK_ADDRESS "$VIRT_LIBVIRT_NETWORK_ADDRESS"
+validate_ipv4_address VIRT_LIBVIRT_NETWORK_NETMASK "$VIRT_LIBVIRT_NETWORK_NETMASK"
+validate_ipv4_address VIRT_LIBVIRT_NETWORK_DHCP_START "$VIRT_LIBVIRT_NETWORK_DHCP_START"
+validate_ipv4_address VIRT_LIBVIRT_NETWORK_DHCP_END "$VIRT_LIBVIRT_NETWORK_DHCP_END"
+validate_managed_libvirt_network_xml \
+  "$LIBVIRT_NETWORK_XML" \
+  "$VIRT_LIBVIRT_NETWORK_NAME" \
+  "$VIRT_LIBVIRT_NETWORK_BRIDGE" \
+  "$VIRT_LIBVIRT_NETWORK_ADDRESS" \
+  "$VIRT_LIBVIRT_NETWORK_NETMASK" \
+  "$VIRT_LIBVIRT_NETWORK_DHCP_START" \
+  "$VIRT_LIBVIRT_NETWORK_DHCP_END"
+validate_https_bind_address VIRT_INCUS_HTTPS_ADDRESS "$VIRT_INCUS_HTTPS_ADDRESS"
+validate_non_negative_integer VIRT_LIBVIRT_WAIT_SECONDS "${VIRT_LIBVIRT_WAIT_SECONDS:-45}"
+validate_non_negative_integer VIRT_INCUS_WAIT_SECONDS "${VIRT_INCUS_WAIT_SECONDS:-60}"
+validate_positive_integer VIRT_RETRY_DELAY_SECONDS "${VIRT_RETRY_DELAY_SECONDS:-3}"
+case "$VIRT_INCUS_BRIDGE_IPV4" in
+  auto|none|[0-9]*.[0-9]*.[0-9]*.[0-9]*/[0-9]*) ;;
+  *) fatal "unsupported VIRT_INCUS_BRIDGE_IPV4: ${VIRT_INCUS_BRIDGE_IPV4}" ;;
+esac
+case "$VIRT_INCUS_BRIDGE_IPV6" in
+  auto|none|[0-9a-fA-F:]*/*[0-9]*) ;;
+  *) fatal "unsupported VIRT_INCUS_BRIDGE_IPV6: ${VIRT_INCUS_BRIDGE_IPV6}" ;;
+esac
+
+systemd-tmpfiles --create /etc/tmpfiles.d/85-virtualization-storage.conf
+write_managed_lxc_conf
+validate_lxc_storage_filesystem
+validate_existing_lxc_rootfs_backends
+if [ "$MODE" = --validate-config ]; then
+  [ -r /etc/tmpfiles.d/85-virtualization-storage.conf ] || fatal "managed virtualization tmpfiles policy is missing"
+  [ -r /etc/environment.d/72-libvirt-session.conf ] || fatal "managed libvirt environment policy is missing"
+  [ -r /etc/libvirt/libvirt.conf ] || fatal "managed libvirt config is missing"
+  [ -r /etc/libvirt/libvirtd.conf ] || fatal "managed libvirtd config is missing"
+  [ -r /etc/libvirt/qemu.conf ] || fatal "managed qemu libvirt config is missing"
+  [ -r /etc/libvirt/virtlockd.conf ] || fatal "managed virtlockd config is missing"
+  [ -r /etc/libvirt/virtlogd.conf ] || fatal "managed virtlogd config is missing"
+  [ -x /usr/sbin/libvirtd ] || fatal "libvirtd executable is missing"
+  [ -x /usr/sbin/virtlogd ] || fatal "virtlogd executable is missing"
+  [ -x /usr/sbin/virtlockd ] || fatal "virtlockd executable is missing"
+  [ -r "$LIBVIRT_NETWORK_XML" ] || fatal "managed libvirt network XML is missing"
+  [ -r /etc/libvirt/managed/session-default-pool.xml ] || fatal "managed libvirt session pool XML is missing"
+  [ -r /usr/share/glib-2.0/schemas/91-virt-manager-session.gschema.override ] ||
+    fatal "managed virt-manager GSettings override is missing"
+  [ -r /opt/incus/ui/index.html ] || fatal "incus-ui-canonical is missing its UI payload under /opt/incus/ui"
+  [ -x /usr/bin/lxcfs ] || fatal "lxcfs executable is missing"
+  [ -r /usr/share/lxc/config/common.conf.d/00-lxcfs.conf ] || fatal "Debian LXCFS integration config is missing"
+  [ "$(lxc-config lxc.lxcpath)" = "$VIRT_LXC_PATH" ] ||
+    fatal "LXC reports an unexpected storage path"
+  [ "$(lxc-config lxc.default_config)" = /etc/lxc/default.conf ] ||
+    fatal "LXC reports an unexpected default container config"
+  log "validated managed virtualization configuration"
+  exit 0
+fi
+if [ "$MODE" = --prepare-install ]; then
+  [ -r /opt/incus/ui/index.html ] || fatal "incus-ui-canonical is missing its UI payload under /opt/incus/ui"
+  log "prepared managed virtualization install-time filesystem state"
+  exit 0
+fi
+wait_for_ready_command "libvirt system connection" "${VIRT_LIBVIRT_WAIT_SECONDS:-45}" "${VIRT_RETRY_DELAY_SECONDS:-3}" \
+  virsh -c "$LIBVIRT_NETWORK_URI" uri
+wait_for_ready_command "incus local daemon" "${VIRT_INCUS_WAIT_SECONDS:-60}" "${VIRT_RETRY_DELAY_SECONDS:-3}" \
+  incus --force-local info
+ensure_libvirt_network \
+  "$LIBVIRT_NETWORK_XML" \
+  "$VIRT_LIBVIRT_NETWORK_NAME" \
+  "$VIRT_LIBVIRT_NETWORK_BRIDGE" \
+  "$VIRT_LIBVIRT_NETWORK_ADDRESS" \
+  "$VIRT_LIBVIRT_NETWORK_NETMASK" \
+  "$VIRT_LIBVIRT_NETWORK_DHCP_START" \
+  "$VIRT_LIBVIRT_NETWORK_DHCP_END"
+ensure_incus_initialized \
+  "$VIRT_INCUS_POOL_NAME" \
+  "$VIRT_INCUS_POOL_PATH" \
+  "$VIRT_INCUS_BRIDGE_NAME" \
+  "$VIRT_INCUS_BRIDGE_IPV4" \
+  "$VIRT_INCUS_BRIDGE_IPV6" \
+  "$VIRT_INCUS_HTTPS_ADDRESS"
+
+log "reconciled the split-driver libvirtd system network, Incus, and classic LXC policy"

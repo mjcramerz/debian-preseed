@@ -1,0 +1,22 @@
+{
+  "MetricsReportingEnabled": false,
+  "UserFeedbackAllowed": false,
+  "CloudReportingEnabled": false,
+  "CloudProfileReportingEnabled": false,
+  "UserSecuritySignalsReporting": false,
+  "UserSecurityAuthenticatedReporting": false,
+  "SafeBrowsingProtectionLevel": 1,
+  "SafeBrowsingExtendedReportingEnabled": false,
+  "SafeBrowsingProxiedRealTimeChecksAllowed": false,
+  "SafeBrowsingSurveysEnabled": false,
+  "UrlKeyedAnonymizedDataCollectionEnabled": false,
+  "SearchSuggestEnabled": false,
+  "SpellCheckServiceEnabled": false,
+  "AlternateErrorPagesEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "PasswordManagerEnabled": false,
+  "PasswordManagerPasskeysEnabled": false,
+  "ShoppingListEnabled": false,
+  "SigninInterceptionEnabled": false
+}

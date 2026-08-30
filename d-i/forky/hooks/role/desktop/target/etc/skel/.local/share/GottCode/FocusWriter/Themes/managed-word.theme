@@ -1,0 +1,26 @@
+[Background]
+Color=#34383f
+Image=
+ImageMode=1
+
+[Foreground]
+Color=#ffffff
+Margin=64
+Padding=72
+Position=1
+Rounding=4
+Shadow=true
+ShadowBlurRadius=18
+ShadowColor=#80000000
+ShadowOffsetX=0
+ShadowOffsetY=8
+Width=900
+
+[Text]
+Color=#202124
+Font=Noto Sans,12,-1,5,50,0,0,0,0,0
+
+[Spacings]
+FirstLineIndent=0
+LineSpacing=110
+ParagraphSpacing=8

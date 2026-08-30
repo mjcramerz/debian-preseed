@@ -1,0 +1,6 @@
+// Managed by unattended-installer.
+//
+// Keep target-side APT candidate selection anchored to Debian Trixie when the
+// addon/server-suite override is selected for server installs.
+
+APT::Default-Release "trixie";

@@ -1,0 +1,13 @@
+{
+  "DiagnosticData": 0,
+  "UrlDiagnosticDataEnabled": false,
+  "UserFeedbackAllowed": false,
+  "PersonalizationReportingEnabled": false,
+  "ShowRecommendationsEnabled": false,
+  "SafeBrowsingExtendedReportingEnabled": false,
+  "SearchSuggestEnabled": false,
+  "AlternateErrorPagesEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "PasswordManagerEnabled": false
+}

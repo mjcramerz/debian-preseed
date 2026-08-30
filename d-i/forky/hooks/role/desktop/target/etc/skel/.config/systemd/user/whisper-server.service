@@ -1,0 +1,42 @@
+[Unit]
+Description=Keep the selected Whisper model loaded for the Labwc session
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+Requisite=labwc-session.target
+PartOf=labwc-session.target
+After=labwc-session.target
+StartLimitIntervalSec=10min
+StartLimitBurst=3
+
+[Service]
+Type=exec
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+SyslogIdentifier=whisper-record-toggle
+StandardOutput=journal
+StandardError=journal
+ExecCondition=/bin/sh -eu -c '[ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ] && /usr/bin/systemctl --user --quiet is-active labwc-session.target'
+ExecCondition=/usr/local/libexec/whisper-record-toggle server-enabled
+ExecStart=/usr/local/libexec/whisper-record-toggle server
+ExecStartPost=/usr/local/libexec/whisper-record-toggle server-ready
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=2min
+TimeoutStopSec=5s
+# The server and health client enter narrower AppArmor child domains with rCx.
+# no_new_privs rejects those transitions because the child domains deliberately
+# own network access that the controller lacks; keep the unit unprivileged and
+# let AppArmor enforce the intended domain separation instead.
+NoNewPrivileges=false
+# Per-user filesystem namespace directives implicitly enable PrivateUsers=,
+# which hides host-root ownership behind the overflow UID. Keep the generated
+# root-owned configuration verifiable and rely on this unit's AppArmor domain
+# plus the fixed read-only system paths instead.
+RestrictAddressFamilies=AF_UNIX AF_INET
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=labwc-session.target

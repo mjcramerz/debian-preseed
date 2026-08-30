@@ -1,0 +1,32 @@
+[Unit]
+Description=Run Crystal Dock in the Labwc session
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+ConditionFileIsExecutable=/usr/bin/crystal-dock
+Requisite=labwc-session.target
+PartOf=labwc-session.target
+After=labwc-session.target labwc-output-watch.service
+
+[Service]
+Type=exec
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=ELECTRON_OZONE_PLATFORM_HINT=wayland
+Environment=GDK_BACKEND=wayland
+Environment=GDK_DISABLE=vulkan
+Environment=GSK_RENDERER=opengl
+Environment=QT_OPENGL=desktop
+Environment=QT_QPA_PLATFORM=wayland
+Environment=QSG_RHI_BACKEND=opengl
+ExecCondition=/bin/sh -eu -c '[ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ] && /usr/bin/systemctl --user --quiet is-active labwc-session.target'
+ExecStartPre=/usr/local/bin/labwc-sync-application-launchers %u %h
+ExecStart=/usr/bin/crystal-dock
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=10s
+KillMode=process
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=labwc-session.target

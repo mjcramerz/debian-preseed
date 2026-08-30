@@ -1,0 +1,15 @@
+[Unit]
+Description=Watch for managed external software update events
+Requisite=labwc-session.target
+After=labwc-session.target
+PartOf=labwc-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+
+[Path]
+PathChanged=/var/lib/software/events
+Unit=managed-external-software-notify.service
+
+[Install]
+WantedBy=labwc-session.target

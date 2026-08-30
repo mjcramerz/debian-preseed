@@ -1,0 +1,6 @@
+# Managed by unattended-installer.
+ACTION!="add|change", GOTO="installer_ch341a_end"
+SUBSYSTEM!="usb", GOTO="installer_ch341a_end"
+ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="5512", MODE="0660", GROUP="usbadmin", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55db", MODE="0660", GROUP="usbadmin", TAG+="uaccess", ENV{ID_MM_DEVICE_IGNORE}="1"
+LABEL="installer_ch341a_end"

@@ -1,0 +1,78 @@
+#!/usr/bin/python3 -I
+"""Stable inner entrypoint for the Zoom/Discord compatibility namespace."""
+
+from __future__ import annotations
+
+import stat
+from pathlib import Path
+import sys
+
+sys.dont_write_bytecode = True
+
+PACKAGE_ROOT = Path("/usr/local/lib/python3.14/dist-packages")
+PACKAGE_DIRECTORY = PACKAGE_ROOT / "labwc_managed_app"
+RUNTIME_MODULE = PACKAGE_DIRECTORY / "wayland_compat_runtime.py"
+SYSTEM_OWNER_ANCHOR = Path("/usr")
+
+
+def sandbox_system_owner() -> tuple[int, int]:
+    try:
+        metadata = SYSTEM_OWNER_ANCHOR.lstat()
+    except OSError:
+        print(
+            "fatal: private compatibility system owner is unavailable",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        print(
+            "fatal: private compatibility system owner is unsafe",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return metadata.st_uid, metadata.st_gid
+
+
+def require_managed_path(
+    path: Path,
+    *,
+    directory: bool,
+    system_owner: tuple[int, int],
+) -> None:
+    try:
+        metadata = path.lstat()
+    except OSError:
+        print(f"fatal: private compatibility runtime is unavailable: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    expected_type = stat.S_ISDIR if directory else stat.S_ISREG
+    if stat.S_ISLNK(metadata.st_mode) or not expected_type(metadata.st_mode):
+        print(f"fatal: private compatibility runtime is unavailable: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    if (
+        (metadata.st_uid, metadata.st_gid) != system_owner
+        or metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        print(f"fatal: private compatibility runtime is unsafe: {path}", file=sys.stderr)
+        raise SystemExit(1)
+
+
+SYSTEM_OWNER = sandbox_system_owner()
+require_managed_path(
+    PACKAGE_DIRECTORY,
+    directory=True,
+    system_owner=SYSTEM_OWNER,
+)
+require_managed_path(
+    RUNTIME_MODULE,
+    directory=False,
+    system_owner=SYSTEM_OWNER,
+)
+
+sys.path.insert(0, str(PACKAGE_ROOT))
+from labwc_managed_app.wayland_compat_runtime import main
+
+raise SystemExit(main())

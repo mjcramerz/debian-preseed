@@ -1,0 +1,48 @@
+# Managed by unattended-installer.
+
+abi "/usr/share/apparmor-features/features",
+
+#include <tunables/global>
+
+profile bitwarden /opt/Bitwarden/bitwarden flags=(attach_disconnected) {
+  #include <abstractions/managed-electron-application>
+  include if exists <abstractions/user-tmp>
+
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+  network netlink raw,
+
+  /opt/Bitwarden/ r,
+  /opt/Bitwarden/** mrix,
+
+  owner @{HOME}/.cache/Bitwarden/ rw,
+  owner @{HOME}/.cache/Bitwarden/** rwk,
+  owner @{HOME}/.cache/com.bitwarden.desktop/ rw,
+  owner @{HOME}/.cache/com.bitwarden.desktop/** rwkl,
+  owner @{HOME}/.config/autostart/ rw,
+  owner @{HOME}/.config/autostart/bitwarden.desktop rwkl,
+  owner @{HOME}/.config/Bitwarden/ rw,
+  owner @{HOME}/.config/Bitwarden/** rwkl,
+
+  # Browser integration is limited to the exact proxy, manifest, IPC socket,
+  # and proxy log used by the managed Chromium-family browsers. Bitwarden does
+  # not receive general write access to browser-owned profile state.
+  owner @{HOME}/.config/{chromium,microsoft-edge,vivaldi}/ r,
+  owner @{HOME}/.config/{chromium,microsoft-edge,vivaldi}/NativeMessagingHosts/ rw,
+  owner @{HOME}/.config/{chromium,microsoft-edge,vivaldi}/NativeMessagingHosts/{.bitwarden_desktop_proxy,com.8bit.bitwarden.json} rwkl,
+  owner @{HOME}/.config/{chromium,microsoft-edge}/NativeMessagingHosts/{.app.bw.socket,.app.bw.bitwarden.log} rwkl,
+
+  # Firefox and unconfigured Chromium-family installations remain outside the
+  # managed native-messaging contract.
+  deny owner @{HOME}/.mozilla/native-messaging-hosts/ rw,
+  deny owner @{HOME}/.mozilla/native-messaging-hosts/** rwkl,
+
+  owner @{HOME}/.local/share/Bitwarden/ rw,
+  owner @{HOME}/.local/share/Bitwarden/** rwkl,
+  owner @{HOME}/@{XDG_DOWNLOAD_DIR}/ rw,
+  owner @{HOME}/@{XDG_DOWNLOAD_DIR}/** rwkl,
+
+  include if exists <local/opt.Bitwarden.bitwarden>
+}

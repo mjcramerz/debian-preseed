@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+shutdown_mode=${1:-logout}
+
+case "$shutdown_mode" in
+  logout|power-transition)
+    ;;
+  *)
+    printf 'fatal: unsupported Labwc shutdown mode: %s\n' "$shutdown_mode" >&2
+    exit 1
+    ;;
+esac
+
+# Labwc invokes this hook while compositor termination is already in progress.
+# Systemd owns service, socket, process, and mount teardown; issuing competing
+# stop, signal, unmount, clipboard, or sync operations here creates shutdown
+# races and ordering cycles.
+exit 0

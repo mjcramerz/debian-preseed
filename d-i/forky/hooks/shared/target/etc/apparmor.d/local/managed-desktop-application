@@ -1,0 +1,6 @@
+# Managed by unattended-installer.
+# This file is copied to package-owned GUI profile local include names so
+# profiles shipped as unconfined/default-allow retain the complete managed
+# Wayland and GPU contract when apparmor-managed-modes changes their mode.
+
+#include <abstractions/managed-desktop-application>

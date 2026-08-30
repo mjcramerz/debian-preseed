@@ -1,0 +1,22 @@
+[Unit]
+Description=Apply Kanshi output profiles for the Labwc session
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+ConditionPathExists=%h/.config/kanshi/config
+Requisite=labwc-session.target
+PartOf=labwc-session.target
+After=labwc-session.target labwc-output-watch.service
+
+[Service]
+Type=exec
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecCondition=/bin/sh -eu -c '[ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ] && /usr/bin/systemctl --user --quiet is-active labwc-session.target'
+ExecStart=/usr/local/libexec/labwc-kanshi
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=10s
+#PrivateTmp=yes
+
+[Install]
+WantedBy=labwc-session.target

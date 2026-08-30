@@ -1,0 +1,147 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+LANG=C.UTF-8
+LC_ALL=C.UTF-8
+TZ=UTC
+export LANG LC_ALL PATH TZ
+
+virt_manager_fatal() {
+  printf 'virt-manager-virtops: fatal: %s\n' "$*" >&2
+  exit 1
+}
+
+virt_manager_mode=launcher
+case "$#" in
+  0) ;;
+  1)
+    [ "$1" = --managed-client ] ||
+      virt_manager_fatal 'this managed launcher does not accept arguments'
+    virt_manager_mode=client
+    ;;
+  *)
+    virt_manager_fatal 'this managed launcher does not accept arguments'
+    ;;
+esac
+
+virt_manager_require_labwc_session() {
+  [ -x /usr/bin/systemctl ] ||
+    virt_manager_fatal 'systemctl is unavailable'
+  case "${XDG_RUNTIME_DIR:-}" in
+    /*) ;;
+    *) virt_manager_fatal 'XDG_RUNTIME_DIR must be an absolute path' ;;
+  esac
+  case "${WAYLAND_DISPLAY:-}" in
+    wayland-[0-9]*) ;;
+    *) virt_manager_fatal 'WAYLAND_DISPLAY is unavailable or malformed' ;;
+  esac
+  [ -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ] ||
+    virt_manager_fatal 'the managed Wayland display socket is unavailable'
+  /usr/bin/systemctl --user --quiet is-active labwc-session.target ||
+    virt_manager_fatal 'the Labwc session target is not active'
+}
+
+if [ "$virt_manager_mode" = launcher ]; then
+  [ -x /usr/bin/systemd-run ] ||
+    virt_manager_fatal 'systemd-run is unavailable'
+  virt_manager_require_labwc_session
+  exec /usr/bin/systemd-run \
+    --user \
+    --quiet \
+    --collect \
+    --service-type=exec \
+    --description='Managed Virtual Machine Manager session client' \
+    --property=Requires=virt-session-storage.service \
+    --property='After=labwc-session.target virt-session-storage.service' \
+    --property=PartOf=labwc-session.target \
+    --property=StandardOutput=journal \
+    --property=StandardError=journal \
+    --property=SyslogIdentifier=virt-manager-virtops \
+    --property=KillMode=mixed \
+    --property=TimeoutStopSec=5s \
+    /usr/local/bin/virt-manager-virtops --managed-client
+fi
+
+[ -n "${INVOCATION_ID:-}" ] ||
+  virt_manager_fatal 'the managed client must run as a transient user service'
+[ -x /usr/bin/virt-manager ] ||
+  virt_manager_fatal 'virt-manager is unavailable'
+virt_manager_require_labwc_session
+
+case "${HOME:-}" in
+  /*) ;;
+  *) virt_manager_fatal 'HOME must be an absolute path' ;;
+esac
+case "$HOME" in
+  /|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/@+-]*|*/../*|*/./*|*//*)
+    virt_manager_fatal 'HOME contains unsupported path syntax'
+    ;;
+esac
+
+virt_manager_source_profile() {
+  profile_path=$1
+  profile_label=$2
+
+  [ -f "$profile_path" ] && [ ! -L "$profile_path" ] && [ -r "$profile_path" ] ||
+    virt_manager_fatal "${profile_label} is unavailable or indirect: ${profile_path}"
+  profile_real=$(/usr/bin/readlink -f -- "$profile_path" 2>/dev/null) ||
+    virt_manager_fatal "cannot resolve ${profile_label}: ${profile_path}"
+  [ "$profile_real" = "$profile_path" ] ||
+    virt_manager_fatal "${profile_label} must not traverse symlinks: ${profile_path}"
+  profile_owner=$(/usr/bin/stat -c '%u' -- "$profile_path" 2>/dev/null) ||
+    virt_manager_fatal "cannot inspect ${profile_label} ownership"
+  profile_mode=$(/usr/bin/stat -c '%a' -- "$profile_path" 2>/dev/null) ||
+    virt_manager_fatal "cannot inspect ${profile_label} mode"
+  actual_uid=$(/usr/bin/id -u 2>/dev/null) ||
+    virt_manager_fatal 'cannot resolve the current account identifier'
+  [ "$profile_owner:$profile_mode" = "${actual_uid}:600" ] ||
+    virt_manager_fatal "${profile_label} must be account-owned mode 0600"
+
+  # shellcheck disable=SC1090
+  . "$profile_path"
+}
+
+unset \
+  BASH_ENV \
+  ENV \
+  GCONV_PATH \
+  GI_TYPELIB_PATH \
+  LD_AUDIT \
+  LD_DEBUG \
+  LIBVIRT_DEFAULT_URI \
+  LIBVIRT_AUTOSTART \
+  LD_LIBRARY_PATH \
+  LD_PRELOAD \
+  PYTHONHOME \
+  PYTHONINSPECT \
+  PYTHONPATH \
+  PYTHONSTARTUP \
+  PYTHONUSERBASE \
+  VAGRANT_DEFAULT_PROVIDER \
+  VAGRANT_HOME \
+  VIRSH_DEFAULT_CONNECT_URI
+
+virt_manager_source_profile \
+  "${HOME}/.profile.d/71-devops-de.sh" \
+  'managed DevOps profile'
+virt_manager_source_profile \
+  "${HOME}/.profile.d/72-virt-vagrant.sh" \
+  'managed virtualization profile'
+
+command -v virtops_apply_environment >/dev/null 2>&1 ||
+  virt_manager_fatal 'managed virtualization environment function is unavailable'
+command -v virtops_validate_services >/dev/null 2>&1 ||
+  virt_manager_fatal 'managed virtualization service validation function is unavailable'
+
+virtops_apply_environment ||
+  virt_manager_fatal 'managed virtualization environment validation failed'
+virtops_validate_services ||
+  virt_manager_fatal 'managed libvirt session policy validation failed'
+
+export \
+  LIBVIRT_AUTOSTART=0 \
+  LIBVIRT_DEFAULT_URI=qemu:///session \
+  VIRSH_DEFAULT_CONNECT_URI=qemu:///session
+
+exec /usr/bin/virt-manager --connect qemu:///session

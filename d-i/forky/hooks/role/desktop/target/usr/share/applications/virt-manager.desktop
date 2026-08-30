@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Virtual Machine Manager
+GenericName=Virtual machine management
+Comment=Manage virtual machines through the private user libvirt session
+Icon=virt-manager
+TryExec=/usr/local/bin/virt-manager-virtops
+Exec=/usr/local/bin/virt-manager-virtops
+Terminal=false
+DBusActivatable=false
+Categories=System;Emulator;
+Keywords=virtualization;libvirt;qemu;kvm;vm;

@@ -1,0 +1,4 @@
+# Managed by unattended-installer.
+source: journalctl
+labels:
+  type: syslog

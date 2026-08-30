@@ -1,0 +1,12 @@
+# Managed by the installer apt-setup preferences generator.
+# Keep the managed target off Vulkan ICDs, development headers, validation
+# layers, and diagnostic tools. The loader ABI remains available for package
+# dependencies.
+
+Package: mesa-vulkan-drivers vulkan-tools libvulkan-dev vulkan-validationlayers vulkan-validationlayers-dev vulkan-utility-libraries-dev vulkan-headers
+Pin: version *
+Pin-Priority: -1
+
+Package: nvidia-vulkan-icd nvidia-primus-vk-common nvidia-primus-vk-wrapper primus-vk libprimus-vk1
+Pin: version *
+Pin-Priority: -1

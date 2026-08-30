@@ -1,0 +1,139 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+config_file=/etc/default/managed-syncthing
+[ -r "$config_file" ] || {
+  printf 'fatal: missing managed syncthing defaults: %s\n' "$config_file" >&2
+  exit 1
+}
+
+# shellcheck disable=SC1090
+. "$config_file"
+
+syncthing_fatal() {
+  printf '[managed-syncthing] fatal: %s\n' "$*" >&2
+  exit 1
+}
+
+syncthing_require_abs_path() {
+  case "${2:-}" in
+    /*) ;;
+    *) syncthing_fatal "${1} must be an absolute path" ;;
+  esac
+}
+
+syncthing_require_port() {
+  case "${2:-}" in
+    ''|*[!0-9]*)
+      syncthing_fatal "${1} must be a numeric port"
+      ;;
+  esac
+  [ "$2" -ge 1 ] && [ "$2" -le 65535 ] || syncthing_fatal "${1} must be in range 1..65535"
+}
+
+mode=${1:-}
+case "$mode" in
+  --prepare|--validate-config) ;;
+  *) syncthing_fatal "unsupported mode: ${mode}" ;;
+esac
+
+syncthing_require_abs_path SYNCTHING_DATA_DIR "$SYNCTHING_DATA_DIR"
+syncthing_require_abs_path SYNCTHING_STATE_DIR "$SYNCTHING_STATE_DIR"
+syncthing_require_port SYNCTHING_TCP_PORT "$SYNCTHING_TCP_PORT"
+
+SYNCTHING_USER=${SYNCTHING_USER:-${USER:-}}
+[ -n "$SYNCTHING_USER" ] || syncthing_fatal "SYNCTHING_USER must not be empty"
+syncthing_uid=
+syncthing_gid=
+if [ "$(id -u)" -eq 0 ]; then
+  syncthing_uid=$(id -u "$SYNCTHING_USER" 2>/dev/null || true)
+  syncthing_gid=$(id -g "$SYNCTHING_USER" 2>/dev/null || true)
+  [ -n "$syncthing_uid" ] || syncthing_fatal "SYNCTHING_USER must name an existing account"
+  [ -n "$syncthing_gid" ] || syncthing_fatal "SYNCTHING_USER must resolve a primary group"
+fi
+
+[ -x /usr/bin/syncthing ] || syncthing_fatal "syncthing binary is unavailable"
+[ -x /usr/bin/python3 ] || syncthing_fatal "python3 is unavailable for config rendering"
+
+install -d -m 0700 "$SYNCTHING_DATA_DIR"
+install -d -m 0700 "$(dirname "$SYNCTHING_STATE_DIR")" "$SYNCTHING_STATE_DIR"
+if [ -n "$syncthing_uid" ]; then
+  chown "$syncthing_uid:$syncthing_gid" "$SYNCTHING_DATA_DIR" "$(dirname "$SYNCTHING_STATE_DIR")" "$SYNCTHING_STATE_DIR"
+fi
+if [ ! -r "$SYNCTHING_STATE_DIR/config.xml" ] && [ "$mode" = --prepare ]; then
+  syncthing generate --home="$SYNCTHING_STATE_DIR" >/dev/null
+fi
+[ -r "$SYNCTHING_STATE_DIR/config.xml" ] || syncthing_fatal "managed Syncthing config is missing: $SYNCTHING_STATE_DIR/config.xml"
+
+python3 - "$SYNCTHING_STATE_DIR/config.xml" "$SYNCTHING_DATA_DIR" "$SYNCTHING_TCP_PORT" "$SYNCTHING_GUI_ENABLED" <<'PY'
+import os
+import sys
+import xml.etree.ElementTree as ET
+
+config_path, data_dir, tcp_port, gui_enabled = sys.argv[1:5]
+tree = ET.parse(config_path)
+root = tree.getroot()
+
+options = root.find("options")
+if options is None:
+    options = ET.SubElement(root, "options")
+
+def set_option(name: str, value: str) -> None:
+    elem = options.find(name)
+    if elem is None:
+        elem = ET.SubElement(options, name)
+    elem.text = value
+
+for elem in list(options.findall("listenAddress")):
+    options.remove(elem)
+listen = ET.SubElement(options, "listenAddress")
+listen.text = f"tcp://0.0.0.0:{tcp_port}"
+set_option("globalAnnounceEnabled", "false")
+set_option("localAnnounceEnabled", "false")
+set_option("relaysEnabled", "false")
+set_option("natEnabled", "false")
+set_option("announceLANAddresses", "false")
+set_option("startBrowser", "false")
+
+gui = root.find("gui")
+if gui is not None:
+    gui.set("enabled", "true" if gui_enabled == "true" else "false")
+    address = gui.find("address")
+    if address is not None:
+        address.text = "127.0.0.1:8384"
+
+devices = root.findall("device")
+device_id = devices[0].get("id") if devices else None
+folder = root.find("folder")
+if folder is None:
+    folder = ET.SubElement(
+        root,
+        "folder",
+        {
+            "id": "default",
+            "label": "Syncthing",
+            "path": data_dir,
+            "type": "sendreceive",
+            "fsWatcherEnabled": "true",
+            "rescanIntervalS": "3600",
+        },
+    )
+    if device_id:
+        ET.SubElement(folder, "device", {"id": device_id})
+else:
+    folder.set("label", "Syncthing")
+    folder.set("path", data_dir)
+    folder.set("type", folder.get("type") or "sendreceive")
+    if device_id and not any(child.get("id") == device_id for child in folder.findall("device")):
+        ET.SubElement(folder, "device", {"id": device_id})
+
+tree.write(config_path, encoding="utf-8", xml_declaration=True)
+os.chmod(config_path, 0o600)
+PY
+
+if [ -n "$syncthing_uid" ]; then
+  chown -R "$syncthing_uid:$syncthing_gid" "$SYNCTHING_DATA_DIR" "$SYNCTHING_STATE_DIR"
+fi

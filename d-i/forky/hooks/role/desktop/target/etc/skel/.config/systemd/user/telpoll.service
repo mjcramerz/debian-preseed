@@ -1,0 +1,56 @@
+[Unit]
+Description=Long-poll managed Telegram messages and attachments
+After=labwc-session.target
+Requisite=labwc-session.target
+PartOf=labwc-session.target
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+ConditionPathExists=/etc/telpoll/telpoll.conf
+ConditionPathExists=/etc/default/labwc-plans
+StartLimitIntervalSec=120s
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=HOME=%h
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+UnsetEnvironment=ALL_PROXY HTTPS_PROXY HTTP_PROXY NO_PROXY all_proxy https_proxy http_proxy no_proxy
+ExecStart=/usr/local/libexec/telpoll
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+# Polling must never delay logout, reboot, or power-off for more than five
+# seconds. SIGTERM requests a clean daemon exit; systemd then removes any
+# remaining process in the service control group.
+TimeoutStopSec=5s
+KillMode=control-group
+SyslogIdentifier=telpoll
+StandardOutput=journal
+StandardError=journal
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StateDirectory=telpoll
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+# Capability directives are intentionally omitted. In a non-root user manager,
+# capability setup can depend on user-namespace support and fail before
+# ExecStart. NoNewPrivileges and the executable's AppArmor transition retain
+# the intended privilege boundary.
+KeyringMode=private
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+TasksMax=256
+UMask=0077
+
+# Do not add PrivateTmp=, ProtectHome=, ProtectSystem=, ReadWritePaths=, or
+# other per-user filesystem namespace directives here. On the supported user
+# manager they can remap ownership to the overflow account and leave artifacts
+# as unknown:nogroup. The managed AppArmor attachment provides the filesystem
+# boundary for this service instead.
+
+[Install]
+WantedBy=labwc-session.target

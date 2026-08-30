@@ -1,0 +1,168 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+LANG=C.UTF-8
+LC_ALL=C.UTF-8
+TZ=UTC
+LIBVIRT_AUTOSTART=0
+export LANG LC_ALL LIBVIRT_AUTOSTART PATH TZ
+
+POOL_NAME=default
+MANAGED_POOL_XML=/etc/libvirt/managed/session-default-pool.xml
+SYSTEM_OWNER_ANCHOR=/usr
+STORAGE_URI=qemu:///session
+
+session_fatal() {
+  printf 'virt-session-storage: fatal: %s\n' "$*" >&2
+  exit 1
+}
+
+resolve_system_owner_uid() {
+  [ -d "$SYSTEM_OWNER_ANCHOR" ] && [ ! -L "$SYSTEM_OWNER_ANCHOR" ] ||
+    session_fatal "trusted system-owner anchor is unavailable or indirect: ${SYSTEM_OWNER_ANCHOR}"
+  system_owner_real=$(/usr/bin/readlink -f -- "$SYSTEM_OWNER_ANCHOR") ||
+    session_fatal 'cannot resolve the trusted system-owner anchor'
+  [ "$system_owner_real" = "$SYSTEM_OWNER_ANCHOR" ] ||
+    session_fatal 'trusted system-owner anchor must not traverse symlinks'
+  system_owner_uid=$(/usr/bin/stat -c '%u' -- "$SYSTEM_OWNER_ANCHOR") ||
+    session_fatal 'cannot inspect trusted system-owner anchor ownership'
+  system_owner_mode=$(/usr/bin/stat -c '%a' -- "$SYSTEM_OWNER_ANCHOR") ||
+    session_fatal 'cannot inspect trusted system-owner anchor mode'
+  case "$system_owner_uid" in
+    ''|*[!0-9]*)
+      session_fatal 'trusted system-owner anchor identifier is malformed'
+      ;;
+  esac
+  case "$system_owner_mode" in
+    ''|*[!0-7]*)
+      session_fatal 'trusted system-owner anchor mode is malformed'
+      ;;
+  esac
+  [ $((0$system_owner_mode & 022)) -eq 0 ] ||
+    session_fatal 'trusted system-owner anchor must not be writable by group or others'
+}
+
+[ "$#" -eq 2 ] ||
+  session_fatal 'usage: virt-session-storage /etc/libvirt/managed/session-default-pool.xml /absolute/session/pool/path'
+pool_xml=$1
+expected_pool=$2
+[ "$pool_xml" = "$MANAGED_POOL_XML" ] ||
+  session_fatal "pool XML must be ${MANAGED_POOL_XML}"
+
+actual_user=$(/usr/bin/id -un) ||
+  session_fatal 'cannot resolve the current account name'
+actual_uid=$(/usr/bin/id -u) ||
+  session_fatal 'cannot resolve the current account identifier'
+case "$actual_user" in
+  ''|.|..|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.@-]*)
+    session_fatal 'the current account name is malformed'
+    ;;
+esac
+case "$actual_uid" in
+  ''|*[!0-9]*)
+    session_fatal 'the current account identifier is malformed'
+    ;;
+esac
+case "$expected_pool" in
+  /*) ;;
+  *) session_fatal "pool path must be absolute: ${expected_pool:-unset}" ;;
+esac
+case "$expected_pool" in
+  /|*..*|*//*|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/@%:+,-]*)
+    session_fatal "pool path contains unsupported syntax: ${expected_pool}"
+    ;;
+esac
+expected_pool_suffix="/${actual_user}/images"
+case "$expected_pool" in
+  *"$expected_pool_suffix") ;;
+  *) session_fatal "pool path must end in ${expected_pool_suffix}" ;;
+esac
+
+expected_runtime="/run/user/${actual_uid}"
+[ "${XDG_RUNTIME_DIR:-}" = "$expected_runtime" ] ||
+  session_fatal "XDG_RUNTIME_DIR must be ${expected_runtime}"
+[ -d "$expected_runtime" ] && [ ! -L "$expected_runtime" ] ||
+  session_fatal "runtime directory is unavailable or indirect: ${expected_runtime}"
+runtime_owner=$(/usr/bin/stat -c '%u' -- "$expected_runtime") ||
+  session_fatal 'cannot inspect runtime directory ownership'
+runtime_mode=$(/usr/bin/stat -c '%a' -- "$expected_runtime") ||
+  session_fatal 'cannot inspect runtime directory mode'
+[ "$runtime_owner:$runtime_mode" = "${actual_uid}:700" ] ||
+  session_fatal 'runtime directory must be current-user-owned with mode 0700'
+
+[ -d "$expected_pool" ] && [ ! -L "$expected_pool" ] &&
+  [ -r "$expected_pool" ] && [ -w "$expected_pool" ] && [ -x "$expected_pool" ] ||
+  session_fatal "pool path is unavailable or indirect: ${expected_pool}"
+pool_real=$(/usr/bin/readlink -f -- "$expected_pool") ||
+  session_fatal 'cannot resolve the pool path'
+[ "$pool_real" = "$expected_pool" ] ||
+  session_fatal 'pool path must not traverse symlinks'
+pool_owner=$(/usr/bin/stat -c '%u' -- "$expected_pool") ||
+  session_fatal 'cannot inspect pool ownership'
+pool_mode=$(/usr/bin/stat -c '%a' -- "$expected_pool") ||
+  session_fatal 'cannot inspect pool mode'
+[ "$pool_owner:$pool_mode" = "${actual_uid}:700" ] ||
+  session_fatal 'pool path must be current-user-owned with mode 0700'
+
+resolve_system_owner_uid
+[ -f "$pool_xml" ] && [ ! -L "$pool_xml" ] && [ -r "$pool_xml" ] ||
+  session_fatal "managed pool XML is unavailable or indirect: ${pool_xml}"
+pool_xml_real=$(/usr/bin/readlink -f -- "$pool_xml") ||
+  session_fatal 'cannot resolve the managed pool XML'
+[ "$pool_xml_real" = "$pool_xml" ] ||
+  session_fatal 'managed pool XML must not traverse symlinks'
+pool_xml_owner=$(/usr/bin/stat -c '%u' -- "$pool_xml") ||
+  session_fatal 'cannot inspect managed pool XML ownership'
+pool_xml_mode=$(/usr/bin/stat -c '%a' -- "$pool_xml") ||
+  session_fatal 'cannot inspect managed pool XML mode'
+[ "$pool_xml_owner:$pool_xml_mode" = "${system_owner_uid}:644" ] ||
+  session_fatal "managed pool XML must match trusted system ownership and mode 0644 (found ${pool_xml_owner}:${pool_xml_mode}, expected ${system_owner_uid}:644)"
+
+[ "$(/usr/bin/grep -Ec "^[[:space:]]*<pool type=['\"]dir['\"]>[[:space:]]*$" "$pool_xml")" -eq 1 ] ||
+  session_fatal 'managed pool XML must define exactly one directory pool'
+[ "$(/usr/bin/grep -Ec '^[[:space:]]*<name>[^<]+</name>[[:space:]]*$' "$pool_xml")" -eq 1 ] ||
+  session_fatal 'managed pool XML must define exactly one pool name'
+[ "$(/usr/bin/grep -Ec '^[[:space:]]*<path>[^<]+</path>[[:space:]]*$' "$pool_xml")" -eq 1 ] ||
+  session_fatal 'managed pool XML must define exactly one target path'
+xml_pool_name=$(
+  /usr/bin/sed -n 's@^[[:space:]]*<name>\([^<]*\)</name>[[:space:]]*$@\1@p' "$pool_xml"
+)
+xml_pool_path=$(
+  /usr/bin/sed -n 's@^[[:space:]]*<path>\([^<]*\)</path>[[:space:]]*$@\1@p' "$pool_xml"
+)
+[ "$xml_pool_name" = "$POOL_NAME" ] ||
+  session_fatal "managed pool XML name must be ${POOL_NAME}"
+[ "$xml_pool_path" = "$expected_pool" ] ||
+  session_fatal "managed pool XML path must be ${expected_pool}"
+
+if /usr/bin/virsh -c "$STORAGE_URI" pool-info "$POOL_NAME" >/dev/null 2>&1; then
+  existing_xml=$(
+    /usr/bin/virsh -c "$STORAGE_URI" pool-dumpxml "$POOL_NAME" 2>/dev/null
+  ) || session_fatal "cannot read existing libvirt session pool ${POOL_NAME}"
+  printf '%s\n' "$existing_xml" |
+    /usr/bin/grep -Eq "<pool type=['\"]dir['\"]" ||
+    session_fatal "pool ${POOL_NAME} is not a directory pool"
+  existing_path=$(
+    printf '%s\n' "$existing_xml" |
+      /usr/bin/sed -n 's@.*<path>\([^<]*\)</path>.*@\1@p' |
+      /usr/bin/sed -n '1p'
+  )
+  [ "$existing_path" = "$expected_pool" ] ||
+    session_fatal "pool ${POOL_NAME} already uses ${existing_path:-an unknown path}"
+else
+  /usr/bin/virsh -c "$STORAGE_URI" pool-define "$pool_xml" >/dev/null ||
+    session_fatal "cannot define libvirt session pool ${POOL_NAME}"
+fi
+
+if ! /usr/bin/virsh -c "$STORAGE_URI" pool-list --name |
+  /usr/bin/grep -Fqx -- "$POOL_NAME"
+then
+  /usr/bin/virsh -c "$STORAGE_URI" pool-start "$POOL_NAME" >/dev/null ||
+    session_fatal "cannot start libvirt session pool ${POOL_NAME}"
+fi
+/usr/bin/virsh -c "$STORAGE_URI" pool-autostart "$POOL_NAME" >/dev/null ||
+  session_fatal "cannot enable autostart for libvirt session pool ${POOL_NAME}"
+/usr/bin/virsh -c "$STORAGE_URI" pool-list --name |
+  /usr/bin/grep -Fqx -- "$POOL_NAME" ||
+  session_fatal "libvirt session pool ${POOL_NAME} is inactive after initialization"

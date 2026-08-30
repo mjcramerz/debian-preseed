@@ -1,0 +1,15 @@
+[Unit]
+Description=Synchronize managed Labwc application launchers
+Requisite=labwc-session.target
+After=labwc-session.target
+PartOf=labwc-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/labwc-sync-application-launchers %u %h
+
+[Install]
+WantedBy=labwc-session.target

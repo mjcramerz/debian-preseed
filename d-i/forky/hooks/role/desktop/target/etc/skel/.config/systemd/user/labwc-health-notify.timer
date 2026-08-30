@@ -1,0 +1,17 @@
+[Unit]
+Description=Periodic Labwc desktop health notifications
+Requisite=labwc-session.target
+After=labwc-session.target
+PartOf=labwc-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+
+[Timer]
+OnActiveSec=20s
+OnUnitActiveSec=5m
+AccuracySec=1m
+Unit=labwc-health-notify.service
+
+[Install]
+WantedBy=labwc-session.target

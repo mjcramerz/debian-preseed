@@ -1,0 +1,6 @@
+# Managed by the installer apt-setup preferences generator.
+# Block Debian Forky packages for the server-side target policy variant.
+
+Package: *
+Pin: release n=forky
+Pin-Priority: -1

@@ -1,0 +1,35 @@
+[Unit]
+Description=Capture a Whisper voice recording through PipeWire
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+Requisite=labwc-session.target
+PartOf=labwc-session.target
+After=labwc-session.target pipewire.service pipewire-pulse.service wireplumber.service
+
+[Service]
+Type=exec
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+SyslogIdentifier=whisper-record-toggle
+StandardOutput=journal
+StandardError=journal
+ExecCondition=/bin/sh -eu -c '[ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ] && /usr/bin/systemctl --user --quiet is-active labwc-session.target'
+ExecStart=/usr/bin/timeout --foreground --signal=INT --kill-after=1s 15s /usr/local/libexec/whisper-record-toggle record-worker
+ExecStopPost=/usr/local/libexec/whisper-record-toggle finalize-recording
+SuccessExitStatus=1 124
+Restart=no
+TimeoutStartSec=15s
+TimeoutStopSec=5s
+KillSignal=SIGINT
+KillMode=control-group
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+
+# This unit is intentionally not enabled: recording starts only from the
+# explicit Labwc/Waybar toggle and is stopped when labwc-session.target stops.

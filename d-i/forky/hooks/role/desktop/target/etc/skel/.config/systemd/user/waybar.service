@@ -1,0 +1,18 @@
+[Unit]
+Description=Highly customizable Wayland bar for Sway and Wlroots based compositors
+Documentation=https://github.com/Alexays/Waybar/wiki/
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+ConditionPathExists=%h/.config/waybar/config
+ConditionPathExists=%h/.config/waybar/style.css
+Requisite=labwc-session.target
+PartOf=labwc-session.target
+After=labwc-session.target labwc-output-watch.service
+
+[Service]
+Type=exec
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/waybar -c %h/.config/waybar/config -s %h/.config/waybar/style.css
+ExecReload=kill -SIGUSR2 $MAINPID
+Restart=on-failure

@@ -1,0 +1,95 @@
+{
+  "ExtensionDeveloperModeSettings": 1,
+  "ExtensionSettings": {
+    "jplgfhpmjnbigmhklmmbgecoobifkmpa": {
+      "blocked_install_message": "Proton VPN is disabled by managed browser policy.",
+      "installation_mode": "removed"
+    },
+    "doojmbjmlfjjnbmnoijecmcbfeoakpjm": {
+      "blocked_permissions": [
+        "bookmarks",
+        "clipboardRead",
+        "clipboardWrite",
+        "downloads",
+        "history",
+        "management",
+        "nativeMessaging",
+        "proxy"
+      ],
+      "file_url_navigation_allowed": false,
+      "installation_mode": "force_installed",
+      "toolbar_pin": "force_pinned",
+      "update_url": "https://clients2.google.com/service/update2/crx"
+    },
+    "ddkjiahejlhfcafbddmgiahcphecmpfh": {
+      "blocked_permissions": [
+        "bookmarks",
+        "clipboardRead",
+        "clipboardWrite",
+        "cookies",
+        "debugger",
+        "downloads",
+        "history",
+        "management",
+        "nativeMessaging",
+        "privacy",
+        "proxy",
+        "tabs",
+        "webRequest",
+        "webRequestBlocking"
+      ],
+      "file_url_navigation_allowed": false,
+      "installation_mode": "force_installed",
+      "toolbar_pin": "force_pinned",
+      "update_url": "https://clients2.google.com/service/update2/crx"
+    },
+    "pkehgijcmpdhfbdbbnkijodmdjhbjlgp": {
+      "blocked_permissions": [
+        "bookmarks",
+        "clipboardRead",
+        "clipboardWrite",
+        "debugger",
+        "downloads",
+        "history",
+        "management",
+        "nativeMessaging",
+        "proxy"
+      ],
+      "file_url_navigation_allowed": false,
+      "installation_mode": "force_installed",
+      "toolbar_pin": "force_pinned",
+      "update_url": "https://clients2.google.com/service/update2/crx"
+    }
+  },
+  "3rdparty": {
+    "extensions": {
+      "ddkjiahejlhfcafbddmgiahcphecmpfh": {
+        "defaultFiltering": "complete",
+        "disabledFeatures": [
+          "dashboard",
+          "develop"
+        ],
+        "disableFirstRunPage": true,
+        "noFiltering": [],
+        "popupBlockMode": true,
+        "rulesets": [
+          "+default",
+          "+adguard-spyware-url",
+          "+block-lan"
+        ],
+        "showBlockedCount": true,
+        "strictBlockMode": true
+      },
+      "pkehgijcmpdhfbdbbnkijodmdjhbjlgp": {
+        "checkForDNTPolicy": false,
+        "disabledSites": [],
+        "learnLocally": false,
+        "learnInIncognito": false,
+        "sendDNTSignal": true,
+        "showCounter": true,
+        "showIntroPage": false,
+        "trackingDomains": []
+      }
+    }
+  }
+}

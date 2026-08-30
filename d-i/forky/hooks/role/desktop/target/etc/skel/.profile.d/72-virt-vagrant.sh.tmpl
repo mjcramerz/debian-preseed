@@ -1,0 +1,302 @@
+# shellcheck shell=sh
+# Managed by unattended-installer.
+#
+# Virtualization is deliberately isolated from the ordinary login and DevOps
+# environments. Sourcing this fragment defines `virtops` only. Entering that
+# command validates the account-private storage/configuration contract and
+# starts a nested interactive shell in the current terminal and working
+# directory inside a transient user scope that requires the managed storage
+# initializer. The scope holds a real qemu:///session connection for the
+# lifetime of that nested shell. Multiple virtops or virt-manager clients
+# therefore share one daemon chain without keeping it alive after the final
+# client exits.
+#
+# Ordinary login clients must never auto-spawn a local daemon.
+LIBVIRT_AUTOSTART=0
+export LIBVIRT_AUTOSTART
+
+virtops_account_owned_path_is_mode() (
+  case "$#" in
+    3) ;;
+    *) return 64 ;;
+  esac
+
+  virtops_path_kind=$1
+  virtops_path_value=$2
+  virtops_path_mode=$3
+  case "$virtops_path_value" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case "$virtops_path_mode" in
+    ''|*[!0-7]*) return 1 ;;
+  esac
+
+  case "$virtops_path_kind" in
+    directory)
+      [ -d "$virtops_path_value" ] &&
+        [ ! -L "$virtops_path_value" ] &&
+        [ -r "$virtops_path_value" ] &&
+        [ -w "$virtops_path_value" ] &&
+        [ -x "$virtops_path_value" ] ||
+        return 1
+      ;;
+    file)
+      [ -f "$virtops_path_value" ] &&
+        [ ! -L "$virtops_path_value" ] &&
+        [ -r "$virtops_path_value" ] ||
+        return 1
+      ;;
+    *)
+      return 64
+      ;;
+  esac
+
+  virtops_path_real=$(/usr/bin/readlink -f -- "$virtops_path_value" 2>/dev/null) ||
+    return 1
+  [ "$virtops_path_real" = "$virtops_path_value" ] || return 1
+  virtops_path_owner=$(/usr/bin/stat -c '%u' -- "$virtops_path_value" 2>/dev/null) ||
+    return 1
+  virtops_path_actual_mode=$(/usr/bin/stat -c '%a' -- "$virtops_path_value" 2>/dev/null) ||
+    return 1
+  virtops_path_uid=$(/usr/bin/id -u 2>/dev/null) || return 1
+  [ "$virtops_path_owner" = "$virtops_path_uid" ] &&
+    [ "$virtops_path_actual_mode" = "$virtops_path_mode" ]
+)
+
+# This public shell helper deliberately rejects all arguments.
+# shellcheck disable=SC2120
+virtops_validate_identity() (
+  case "$#" in
+    0) ;;
+    *) return 64 ;;
+  esac
+
+  case "${USER:-}" in
+    ''|.|..|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.@-]*)
+      printf '%s\n' 'virtops: the current account name is unsafe' >&2
+      return 1
+      ;;
+  esac
+  virtops_actual_user=$(/usr/bin/id -un 2>/dev/null) || {
+    printf '%s\n' 'virtops: cannot resolve the current account name' >&2
+    return 1
+  }
+  [ "$USER" = "$virtops_actual_user" ] || {
+    printf '%s\n' 'virtops: USER does not match the current account' >&2
+    return 1
+  }
+  case "${LOGNAME:-$USER}" in
+    "$USER") ;;
+    *)
+      printf '%s\n' 'virtops: LOGNAME does not match the current account' >&2
+      return 1
+      ;;
+  esac
+  case "${HOME:-}" in
+    /*) ;;
+    *)
+      printf '%s\n' 'virtops: HOME must be an absolute path' >&2
+      return 1
+      ;;
+  esac
+
+  virtops_actual_uid=$(/usr/bin/id -u 2>/dev/null) || {
+    printf '%s\n' 'virtops: cannot resolve the current account identifier' >&2
+    return 1
+  }
+  case "$virtops_actual_uid" in
+    ''|*[!0-9]*)
+      printf '%s\n' 'virtops: the current account identifier is malformed' >&2
+      return 1
+      ;;
+  esac
+  [ "${XDG_RUNTIME_DIR:-}" = "/run/user/${virtops_actual_uid}" ] || {
+    printf 'virtops: XDG_RUNTIME_DIR must be /run/user/%s\n' "$virtops_actual_uid" >&2
+    return 1
+  }
+  virtops_account_owned_path_is_mode directory "$XDG_RUNTIME_DIR" 700 || {
+    printf '%s\n' 'virtops: XDG_RUNTIME_DIR must be a direct account-owned mode-0700 directory' >&2
+    return 1
+  }
+)
+
+# This public shell helper deliberately rejects all arguments.
+# shellcheck disable=SC2120
+virtops_apply_environment() {
+  case "$#" in
+    0) ;;
+    *)
+      printf '%s\n' 'virtops: virtops_apply_environment accepts no arguments' >&2
+      return 64
+      ;;
+  esac
+
+  command -v devops_de_apply_environment >/dev/null 2>&1 || {
+    printf '%s\n' 'virtops: the managed DevOps environment is unavailable' >&2
+    return 1
+  }
+  unset \
+    VAGRANT_HOME \
+    VAGRANT_DEFAULT_PROVIDER \
+    LIBVIRT_AUTOSTART \
+    LIBVIRT_DEFAULT_URI \
+    VIRSH_DEFAULT_CONNECT_URI
+  devops_de_apply_environment || {
+    printf '%s\n' 'virtops: failed to apply the managed DevOps environment' >&2
+    return 1
+  }
+  virtops_validate_identity || return 1
+
+  VAGRANT_HOME="__INSTALLER_DIR_POOL_VAGRANT__/${USER}/home"
+  virtops_libvirt_images="__INSTALLER_DIR_POOL_LIBVIRT_SESSION__/${USER}/images"
+  if ! virtops_account_owned_path_is_mode directory "$VAGRANT_HOME" 700 ||
+     ! virtops_account_owned_path_is_mode file "${VAGRANT_HOME}/Vagrantfile" 600 ||
+     ! virtops_account_owned_path_is_mode directory "$virtops_libvirt_images" 700
+  then
+    unset VAGRANT_HOME virtops_libvirt_images
+    printf '%s\n' 'virtops: managed private virtualization paths or configuration are unsafe' >&2
+    return 1
+  fi
+  for virtops_config_name in \
+    libvirt.conf \
+    libvirtd.conf \
+    qemu.conf \
+    virtlockd.conf \
+    virtlogd.conf
+  do
+    virtops_account_owned_path_is_mode \
+      file \
+      "${HOME}/.config/libvirt/${virtops_config_name}" \
+      600 ||
+      {
+        unset VAGRANT_HOME virtops_config_name virtops_libvirt_images
+        printf '%s\n' 'virtops: managed private virtualization paths or configuration are unsafe' >&2
+        return 1
+      }
+  done
+
+  VAGRANT_DEFAULT_PROVIDER=libvirt
+  LIBVIRT_AUTOSTART=0
+  LIBVIRT_DEFAULT_URI=qemu:///session
+  VIRSH_DEFAULT_CONNECT_URI=qemu:///session
+  export \
+    VAGRANT_HOME \
+    VAGRANT_DEFAULT_PROVIDER \
+    LIBVIRT_AUTOSTART \
+    LIBVIRT_DEFAULT_URI \
+    VIRSH_DEFAULT_CONNECT_URI
+  unset virtops_config_name virtops_libvirt_images
+  return 0
+}
+
+# This public shell helper deliberately rejects all arguments.
+# shellcheck disable=SC2120
+virtops_validate_services() (
+  case "$#" in
+    0) ;;
+    *)
+      printf '%s\n' 'virtops: virtops_validate_services accepts no arguments' >&2
+      return 64
+      ;;
+  esac
+
+  [ -x /usr/bin/systemd-run ] || {
+    printf '%s\n' 'virtops: systemd-run is unavailable for user virtualization activation' >&2
+    return 1
+  }
+  [ -x /usr/bin/virsh ] || {
+    printf '%s\n' 'virtops: virsh is unavailable for session validation' >&2
+    return 1
+  }
+  for virtops_unit in \
+    managed-libvirt-runtime.service \
+    managed-virtlockd.service \
+    managed-virtlogd.service \
+    libvirt-session.service \
+    virt-session-storage.service
+  do
+    [ -r "/etc/systemd/user/${virtops_unit}" ] || {
+      printf 'virtops: required user virtualization unit is unavailable: %s\n' \
+        "$virtops_unit" >&2
+      return 1
+    }
+  done
+)
+
+virtops_activate() (
+  if [ ! -t 0 ] || [ ! -t 1 ]; then
+    printf '%s\n' 'virtops: an interactive terminal is required' >&2
+    return 1
+  fi
+  virtops_apply_environment || return 1
+  virtops_validate_services || return 1
+
+  case "${SHELL:-}" in
+    /bin/bash|/usr/bin/bash|/bin/zsh|/usr/bin/zsh)
+      virtops_shell=$SHELL
+      ;;
+    *)
+      virtops_shell=/bin/bash
+      ;;
+  esac
+  [ -x "$virtops_shell" ] || {
+    printf '%s\n' 'virtops: no supported interactive shell is available' >&2
+    return 1
+  }
+
+  printf '%s\n' 'Entering virtualization environment; exit to return'
+  /usr/bin/systemd-run \
+    --user \
+    --scope \
+    --same-dir \
+    --quiet \
+    --collect \
+    --expand-environment=no \
+    --description='Managed interactive virtualization environment' \
+    --property=Requires=virt-session-storage.service \
+    --property=After=virt-session-storage.service \
+    /bin/sh -eu -c '
+virtops_connection_pid=
+virtops_cleanup_connection() {
+  case "$virtops_connection_pid" in
+    ""|*[!0-9]*) return 0 ;;
+  esac
+  kill -INT "$virtops_connection_pid" 2>/dev/null || true
+  wait "$virtops_connection_pid" 2>/dev/null || true
+  virtops_connection_pid=
+}
+trap virtops_cleanup_connection EXIT
+trap "exit 129" HUP
+trap "exit 130" INT
+trap "exit 143" TERM
+
+virtops_uri=$(/usr/bin/virsh -c qemu:///session uri 2>/dev/null) || {
+  printf "%s\n" "virtops: qemu:///session is unavailable after service activation" >&2
+  exit 1
+}
+[ "$virtops_uri" = qemu:///session ] || {
+  printf "virtops: libvirt returned an unexpected session URI: %s\n" "$virtops_uri" >&2
+  exit 1
+}
+
+/usr/bin/virsh -c qemu:///session event --all --loop >/dev/null 2>&1 &
+virtops_connection_pid=$!
+"$1" -i
+' sh "$virtops_shell" || {
+    printf '%s\n' 'virtops: failed to run the managed virtualization shell scope' >&2
+    return 1
+  }
+)
+
+virtops() {
+  case "$#" in
+    0) ;;
+    *)
+      printf '%s\n' 'usage: virtops' >&2
+      return 64
+      ;;
+  esac
+
+  virtops_activate
+}

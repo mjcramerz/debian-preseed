@@ -1,0 +1,254 @@
+#!/bin/sh
+set -eu
+
+skip_initial_refresh=false
+wait_for_output=false
+case "${1:-}" in
+  '')
+    ;;
+  --skip-initial-refresh)
+    skip_initial_refresh=true
+    ;;
+  --wait-for-output)
+    wait_for_output=true
+    ;;
+  *)
+    printf 'usage: labwc-output-watch [--skip-initial-refresh|--wait-for-output]\n' >&2
+    exit 2
+    ;;
+esac
+[ "$#" -le 1 ] || {
+  printf 'usage: labwc-output-watch [--skip-initial-refresh|--wait-for-output]\n' >&2
+  exit 2
+}
+
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+
+debounce_seconds=${LABWC_OUTPUT_HOTPLUG_DEBOUNCE_SECONDS:-2}
+case "$debounce_seconds" in
+  ''|*[!0-9]*)
+    debounce_seconds=2
+    ;;
+esac
+if [ "$debounce_seconds" -gt 30 ]; then
+  debounce_seconds=2
+fi
+
+read_monotonic_seconds() {
+  IFS=' ' read -r uptime_seconds _ </proc/uptime || return 1
+  uptime_seconds=${uptime_seconds%%.*}
+  case "$uptime_seconds" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$uptime_seconds"
+}
+
+wayland_snapshot_has_current_output() {
+  wayland_state=${1:-}
+  in_wayland_output=false
+  while IFS= read -r wayland_line; do
+    wayland_line=${wayland_line#"${wayland_line%%[![:space:]]*}"}
+    wayland_line=${wayland_line%"${wayland_line##*[![:space:]]}"}
+    case "$wayland_line" in
+      "interface: 'wl_output',"*)
+        in_wayland_output=true
+        ;;
+      interface:*)
+        in_wayland_output=false
+        ;;
+      flags:*)
+        [ "$in_wayland_output" = true ] || continue
+        output_flags=${wayland_line#flags:}
+        output_flags=${output_flags#"${output_flags%%[![:space:]]*}"}
+        case "$output_flags" in
+          current|current\ *|*\ current|*\ current\ *) return 0 ;;
+        esac
+        ;;
+    esac
+  done <<EOF
+$wayland_state
+EOF
+  return 1
+}
+
+output_snapshot_has_output_head() {
+  output_state=${1:-}
+  while IFS= read -r output_line; do
+    case "$output_line" in
+      ''|[[:space:]]*) ;;
+      *) return 0 ;;
+    esac
+  done <<EOF
+$output_state
+EOF
+  return 1
+}
+
+wait_for_wayland_output() {
+  wayland_info=$(command -v wayland-info || true)
+  wlr_randr=$(command -v wlr-randr || true)
+  readiness_refresh=$(command -v labwc-output-refresh || true)
+  [ -n "$wayland_info" ] || exit 1
+  [ -n "$wlr_randr" ] || exit 1
+  [ -n "$readiness_refresh" ] || exit 1
+
+  output_started=$(read_monotonic_seconds) || exit 1
+  output_deadline=$((output_started + 10))
+  output_policy_applied=false
+  while :; do
+    output_now=$(read_monotonic_seconds) || exit 1
+    output_remaining=$((output_deadline - output_now))
+    [ "$output_remaining" -gt 0 ] || break
+
+    if wayland_snapshot=$(
+      /usr/bin/timeout "$output_remaining" "$wayland_info" 2>/dev/null
+    ) && wayland_snapshot_has_current_output "$wayland_snapshot"; then
+      return 0
+    fi
+
+    output_now=$(read_monotonic_seconds) || exit 1
+    output_remaining=$((output_deadline - output_now))
+    [ "$output_remaining" -gt 0 ] || break
+
+    if [ "$output_policy_applied" = false ] &&
+       output_snapshot=$(
+         /usr/bin/timeout "$output_remaining" "$wlr_randr" 2>/dev/null
+       ) &&
+       output_snapshot_has_output_head "$output_snapshot"; then
+      output_now=$(read_monotonic_seconds) || exit 1
+      output_remaining=$((output_deadline - output_now))
+      [ "$output_remaining" -gt 0 ] || break
+      output_policy_applied=true
+      /usr/bin/timeout "$output_remaining" "$readiness_refresh" >/dev/null 2>&1 || true
+      continue
+    fi
+    sleep 0.1
+  done
+
+  printf 'fatal: Labwc did not expose a client-visible Wayland output with a current mode within 10 seconds\n' >&2
+  exit 1
+}
+
+if [ "$wait_for_output" = true ]; then
+  wait_for_wayland_output
+  exit 0
+fi
+
+output_refresh=$(command -v labwc-output-refresh || true)
+[ -n "$output_refresh" ] || exit 0
+
+apply_output_policy() {
+  if "$output_refresh" --idle-topology-active; then
+    "$output_refresh" --restore-idle-topology >/dev/null 2>&1 || true
+    return 0
+  fi
+  "$output_refresh" || true
+}
+
+pending_refresh_pid=
+monitor_pid=
+watch_dir=
+event_fifo=
+refresh_generation=0
+refresh_token=
+
+cancel_pending_refresh() {
+  [ -n "$pending_refresh_pid" ] || return 0
+  kill "$pending_refresh_pid" >/dev/null 2>&1 || true
+  wait "$pending_refresh_pid" 2>/dev/null || true
+  pending_refresh_pid=
+}
+
+schedule_output_policy() {
+  refresh_generation=$((refresh_generation + 1))
+  printf '%s\n' "$refresh_generation" >"$refresh_token"
+  scheduled_refresh_generation=$refresh_generation
+  cancel_pending_refresh
+  (
+    debounce_pid=
+    cancel_debounce() {
+      [ -n "$debounce_pid" ] || return 0
+      kill "$debounce_pid" >/dev/null 2>&1 || true
+      wait "$debounce_pid" 2>/dev/null || true
+      debounce_pid=
+    }
+    trap 'cancel_debounce; exit 0' HUP INT TERM
+
+    sleep "$debounce_seconds" &
+    debounce_pid=$!
+    wait "$debounce_pid" 2>/dev/null || exit 0
+    debounce_pid=
+    current_refresh_generation=
+    IFS= read -r current_refresh_generation <"$refresh_token" || exit 0
+    [ "$current_refresh_generation" = "$scheduled_refresh_generation" ] || exit 0
+    udevadm settle --timeout=5 >/dev/null 2>&1 || true
+    current_refresh_generation=
+    IFS= read -r current_refresh_generation <"$refresh_token" || exit 0
+    [ "$current_refresh_generation" = "$scheduled_refresh_generation" ] || exit 0
+    apply_output_policy
+  ) </dev/null &
+  pending_refresh_pid=$!
+}
+
+cleanup_output_watch() {
+  if [ -n "$refresh_token" ]; then
+    refresh_generation=$((refresh_generation + 1))
+    printf '%s\n' "$refresh_generation" >"$refresh_token" 2>/dev/null || true
+  fi
+  cancel_pending_refresh
+  if [ -n "$monitor_pid" ]; then
+    kill "$monitor_pid" >/dev/null 2>&1 || true
+    wait "$monitor_pid" 2>/dev/null || true
+    monitor_pid=
+  fi
+  [ -z "$event_fifo" ] || rm -f -- "$event_fifo"
+  [ -z "$refresh_token" ] || rm -f -- "$refresh_token"
+  [ -z "$watch_dir" ] || rmdir -- "$watch_dir" 2>/dev/null || true
+}
+
+trap cleanup_output_watch EXIT
+trap 'exit 0' HUP INT TERM
+
+if [ "$skip_initial_refresh" != true ]; then
+  apply_output_policy
+fi
+
+command -v udevadm >/dev/null 2>&1 || exit 0
+command -v mkfifo >/dev/null 2>&1 || exit 0
+command -v mktemp >/dev/null 2>&1 || exit 0
+
+runtime_root=${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}
+case "$runtime_root" in
+  /*) ;;
+  *) runtime_root=/tmp ;;
+esac
+if [ ! -d "$runtime_root" ] || [ ! -w "$runtime_root" ]; then
+  runtime_root=/tmp
+fi
+
+umask 077
+watch_dir=$(mktemp -d "${runtime_root%/}/labwc-output-watch.XXXXXX") || exit 0
+event_fifo="${watch_dir}/events"
+refresh_token="${watch_dir}/refresh-generation"
+mkfifo "$event_fifo" || exit 0
+
+udevadm monitor --subsystem-match=drm >"$event_fifo" 2>/dev/null &
+monitor_pid=$!
+
+while IFS= read -r event_line; do
+  case "$event_line" in
+    *' change '*|*' add '*|*' remove '*|*change*drm*|*add*drm*|*remove*drm*)
+      schedule_output_policy
+      ;;
+  esac
+done <"$event_fifo"
+
+if [ -n "$pending_refresh_pid" ]; then
+  wait "$pending_refresh_pid" 2>/dev/null || true
+  pending_refresh_pid=
+fi
+wait "$monitor_pid" 2>/dev/null || true
+monitor_pid=

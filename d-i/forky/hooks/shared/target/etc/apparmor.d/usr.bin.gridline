@@ -1,0 +1,55 @@
+# Managed by unattended-installer.
+
+abi "/usr/share/apparmor-features/features",
+
+#include <tunables/global>
+
+profile gridline /usr/bin/gridline flags=(attach_disconnected, mediate_deleted) {
+  #include <abstractions/managed-desktop-application>
+  #include <abstractions/managed-webkit-runtime>
+  include if exists <abstractions/user-tmp>
+
+  unix,
+  network inet stream,
+  network inet6 stream,
+  network inet dgram,
+  network inet6 dgram,
+
+  /usr/bin/gridline mr,
+  /usr/bin/bwrap rCx -> webkit-bwrap,
+  /usr/lib/Gridline/ r,
+  /usr/lib/Gridline/resources/ r,
+  /usr/lib/Gridline/resources/** mrix,
+  signal (send) set=(kill) peer=gridline//webkit-bwrap,
+
+  # Gridline receives private XDG state below /pool/db/$USER/gridline while
+  # retaining owner-only access to the account's other managed database files.
+  /pool/ r,
+  /pool/db/ r,
+  owner /pool/db/*/ rw,
+  owner /pool/db/*/** rwkl,
+
+  profile webkit-bwrap flags=(attach_disconnected, mediate_deleted) {
+    #include <abstractions/managed-bwrap-common>
+    #include <abstractions/managed-desktop-runtime>
+    #include <abstractions/managed-webkit-runtime>
+    include if exists <abstractions/user-tmp>
+
+    unix,
+    network inet stream,
+    network inet6 stream,
+    network inet dgram,
+    network inet6 dgram,
+    signal (receive) set=(kill) peer=gridline,
+
+    /usr/bin/true rix,
+    /usr/libexec/glycin-loaders/2+/glycin-svg rix,
+    /pool/ r,
+    /pool/db/ r,
+    owner /pool/db/*/ rw,
+    owner /pool/db/*/gridline/ rw,
+    owner /pool/db/*/gridline/** rwkl,
+  }
+
+  include if exists <local/usr.bin.gridline>
+}

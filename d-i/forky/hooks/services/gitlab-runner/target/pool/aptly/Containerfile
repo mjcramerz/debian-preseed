@@ -1,0 +1,48 @@
+FROM docker.io/library/debian:trixie-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN install -d -m 0755 /var/cache/apt /var/cache/apt/archives /var/lib/apt/lists \
+    && install -d -m 0700 /var/cache/apt/archives/partial /var/lib/apt/lists/partial \
+    && if id -u _apt >/dev/null 2>&1; then chown _apt:root /var/cache/apt/archives/partial /var/lib/apt/lists/partial; fi \
+    && printf '%s\n' \
+        'APT::Install-Recommends "false";' \
+        'APT::Install-Suggests "false";' \
+        > /etc/apt/apt.conf.d/99noinstall-recommends \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends --no-install-suggests \
+        aptly \
+        bash \
+        ca-certificates \
+        gnupg \
+        mmdebstrap \
+        python3 \
+        sbuild \
+        uidmap \
+        util-linux \
+    && printf '%s\n' \
+        '#!/usr/bin/env bash' \
+        'set -Eeuo pipefail' \
+        'real_sbuild=/usr/bin/sbuild' \
+        'extra_args=()' \
+        'has_flag() {' \
+        '  local flag="$1"' \
+        '  shift' \
+        '  local arg' \
+        '  for arg in "$@"; do' \
+        '    if [[ "$arg" == "$flag" || "$arg" == "${flag}="* ]]; then' \
+        '      return 0' \
+        '    fi' \
+        '  done' \
+        '  return 1' \
+        '}' \
+        'if ! has_flag --dist "$@" && ! has_flag -d "$@"; then' \
+        '  extra_args+=("--dist=${DEBIAN_SBUILD_DISTRIBUTION:-unstable}")' \
+        'fi' \
+        'if ! has_flag --chroot-mode "$@"; then' \
+        '  extra_args+=("--chroot-mode=${DEBIAN_SBUILD_CHROOT_MODE:-unshare}")' \
+        'fi' \
+        'exec "$real_sbuild" "${extra_args[@]}" "$@"' \
+        > /usr/local/bin/sbuild \
+    && chmod 0755 /usr/local/bin/sbuild \
+    && rm -rf /var/lib/apt/lists/*

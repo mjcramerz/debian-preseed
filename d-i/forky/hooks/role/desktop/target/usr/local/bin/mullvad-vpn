@@ -1,0 +1,68 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/bin:/bin
+LC_ALL=C.UTF-8
+export PATH LC_ALL
+umask 077
+
+fatal() {
+  printf 'fatal: %s\n' "$*" >&2
+  exit 1
+}
+
+[ "$#" -eq 0 ] || fatal "usage: mullvad-vpn"
+[ "$(/usr/bin/id -u)" -ne 0 ] || fatal "Mullvad VPN must not run as root"
+
+daemon_unit=mullvad-daemon.service
+root_helper=/usr/local/libexec/mullvad-daemon-start
+vendor_launcher='/opt/Mullvad VPN/mullvad-vpn'
+
+[ -x "$root_helper" ] || fatal "Mullvad daemon start helper is unavailable"
+[ -x "$vendor_launcher" ] || fatal "Mullvad VPN launcher is unavailable"
+
+if ! /usr/bin/systemctl --quiet is-active "$daemon_unit"; then
+  if /usr/bin/timeout \
+      --foreground \
+      --kill-after=5s \
+      120s \
+      /usr/bin/pkexec \
+      "$root_helper"
+  then
+    :
+  else
+    start_status=$?
+    fatal "Mullvad daemon start was cancelled or failed (status ${start_status})"
+  fi
+fi
+
+/usr/bin/systemctl --quiet is-active "$daemon_unit" ||
+  fatal "Mullvad daemon did not become active"
+
+unset \
+  DESKTOP_STARTUP_ID \
+  DISPLAY \
+  SESSION_MANAGER \
+  WINDOWID \
+  WLR_XWAYLAND \
+  XAUTHORITY \
+  XWAYLAND \
+  XWAYLAND_FORCE_SCALE \
+  XWAYLAND_NO_GLAMOR \
+  XWAYLAND_PATH \
+  XWAYLAND_RESTART_DELAY \
+  _XWAYLAND_GLOBAL_OUTPUT_SCALE
+
+ELECTRON_OZONE_PLATFORM_HINT=wayland
+GDK_BACKEND=wayland
+QT_QPA_PLATFORM=wayland
+SDL_VIDEODRIVER=wayland
+export \
+  ELECTRON_OZONE_PLATFORM_HINT \
+  GDK_BACKEND \
+  QT_QPA_PLATFORM \
+  SDL_VIDEODRIVER
+
+exec "$vendor_launcher" \
+  --enable-features=UseOzonePlatform \
+  --ozone-platform=wayland

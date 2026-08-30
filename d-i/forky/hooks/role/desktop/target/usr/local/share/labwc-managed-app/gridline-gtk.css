@@ -1,0 +1,27 @@
+/*
+ * Gridline 0.7.11 uses tao's Wayland WlHeader, which installs an explicit
+ * GtkEventBox/GtkHeaderBar client-side titlebar.  Gridline receives this file
+ * through its private XDG_CONFIG_HOME only; Labwc supplies the visible titlebar.
+ */
+eventbox.titlebar,
+eventbox.titlebar > headerbar {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  opacity: 0;
+}
+
+eventbox.titlebar > headerbar * {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 0;
+  -gtk-icon-transform: scale(0);
+  opacity: 0;
+}

@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+
+case "${LABWC_ENABLE_KANSHI:-true}" in
+  true|yes|1|on) ;;
+  *) exit 0 ;;
+esac
+
+[ -r "$HOME/.config/kanshi/config" ] || exit 0
+kanshi_cmd=$(command -v kanshi 2>/dev/null || true)
+[ -n "$kanshi_cmd" ] || exit 0
+
+exec "$kanshi_cmd"

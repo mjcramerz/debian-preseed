@@ -1,0 +1,19 @@
+[Unit]
+Description=KWallet secret portal backend for the Labwc session
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+Requisite=labwc-session.target
+After=labwc-session.target
+PartOf=labwc-session.target
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.impl.portal.desktop.kwallet
+ExecCondition=/bin/sh -eu -c '[ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ] && /usr/bin/systemctl --user --quiet is-active labwc-session.target'
+Environment=QT_QPA_PLATFORM=wayland
+Environment=QT_NO_XDG_DESKTOP_PORTAL=1
+ExecStart=/usr/bin/ksecretd
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=5s

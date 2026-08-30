@@ -1,0 +1,23 @@
+[Unit]
+Description=Refresh Labwc output policy after DRM hotplug events
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+Requisite=labwc-session.target
+PartOf=labwc-session.target
+After=labwc-session.target
+
+[Service]
+Type=exec
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecCondition=/bin/sh -eu -c '[ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${XDG_RUNTIME_DIR:-}" ] && [ -S "${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}" ] && /usr/bin/systemctl --user --quiet is-active labwc-session.target'
+ExecStartPre=/usr/local/libexec/labwc-output-watch --wait-for-output
+ExecStart=/usr/local/libexec/labwc-output-watch --skip-initial-refresh
+Restart=always
+RestartSec=2s
+TimeoutStartSec=15s
+TimeoutStopSec=10s
+#PrivateTmp=yes
+
+[Install]
+WantedBy=labwc-session.target

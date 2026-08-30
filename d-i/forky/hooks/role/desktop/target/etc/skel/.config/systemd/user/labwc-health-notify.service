@@ -1,0 +1,48 @@
+[Unit]
+Description=Labwc desktop health notification check
+Wants=mako.service
+Requisite=labwc-session.target
+After=labwc-session.target mako.service
+PartOf=labwc-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+ConditionEnvironment=XDG_SESSION_TYPE=wayland
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+StartLimitIntervalSec=10s
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+# systemd rechecks watched paths as soon as their triggered service exits.
+# Keep this one-shot unit active for one rate-limit interval to coalesce noisy
+# security-signal updates instead of exhausting the service/path start limit.
+# The notifier installs its signal handler before display preflight and owns the
+# delay, so a target stop cancels the main process with exit status 0. Keep
+# preflight out of ExecCondition: a killed control process is classified failed.
+ExecStart=/usr/local/bin/labwc-health-notify --coalesce-seconds 10
+TimeoutStartSec=30s
+TimeoutStopSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/state
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ReadOnlyPaths=/var/mail
+ReadOnlyPaths=-/var/lib/labwc-notifications
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077

@@ -1,0 +1,56 @@
+#!/bin/sh
+set -eu
+
+requested_lock_background_path=${LABWC_LOCK_BACKGROUND_PATH:-}
+if [ -r /etc/default/labwc-desktop ]; then
+  # shellcheck disable=SC1091
+  . /etc/default/labwc-desktop
+fi
+if [ -n "$requested_lock_background_path" ]; then
+  LABWC_LOCK_BACKGROUND_PATH=$requested_lock_background_path
+fi
+
+command -v swaylock >/dev/null 2>&1 || exit 1
+[ -x /usr/bin/flock ] || {
+  printf 'fatal: /usr/bin/flock is required to serialize swaylock\n' >&2
+  exit 1
+}
+
+config_path=${XDG_CONFIG_HOME:-${HOME}/.config}/swaylock/config
+lock_background_path=${LABWC_LOCK_BACKGROUND_PATH:-/usr/share/backgrounds/login/lock-1920x1080.png}
+
+run_swaylock() {
+  if [ -r "$config_path" ] && [ -r "$lock_background_path" ]; then
+    swaylock -f -c "$config_path" --image "$lock_background_path" --scaling fill "$@" 9>&-
+    return
+  fi
+
+  if [ -r "$config_path" ]; then
+    swaylock -f -c "$config_path" "$@" 9>&-
+    return
+  fi
+
+  if [ -r "$lock_background_path" ]; then
+    swaylock -f --image "$lock_background_path" --scaling fill "$@" 9>&-
+    return
+  fi
+
+  swaylock -f "$@" 9>&-
+}
+
+runtime_dir=${XDG_RUNTIME_DIR:-}
+case "$runtime_dir" in
+  /*)
+    if [ -d "$runtime_dir" ] && [ -w "$runtime_dir" ]; then
+      lock_file="${runtime_dir}/labwc-swaylock.lock"
+      (
+        /usr/bin/flock -n 9 || exit 0
+        run_swaylock "$@"
+      ) 9>"$lock_file"
+      exit $?
+    fi
+    ;;
+esac
+
+printf 'fatal: XDG_RUNTIME_DIR is required to serialize swaylock\n' >&2
+exit 1

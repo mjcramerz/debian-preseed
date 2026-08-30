@@ -1,0 +1,36 @@
+apiVersion: cybops.nftables/v1
+kind: NftablesServiceOverlay
+metadata:
+  name: redis
+  description: Redis overlay. Never public by default.
+  merge_priority: 50
+services:
+  redis:
+    enabled: true
+    direction: inbound
+    protocols:
+    - tcp
+    ports:
+    - 6379
+    allow:
+      ipv4:
+      - 127.0.0.1/32
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 10.8.0.0/24
+      ipv6:
+      - ::1/128
+      - fc00::/7
+      - fe80::/10
+      - fd00:8::/64
+      interfaces:
+      - lo
+      - eth0
+      - en*
+      - __INSTALLER_MANAGED_NETWORK_ETHERNET_IFACE__
+      - wlan0
+      - wl*
+      - __INSTALLER_MANAGED_NETWORK_WIFI_IFACE__
+      - wg0
+    sensitive: true

@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+fatal() {
+  printf 'fatal: %s\n' "$*" >&2
+  exit 1
+}
+
+[ "${LABWC_SESSION_OWNER:-}" = desktop ] ||
+  fatal "labwc-logout must run in the managed desktop session"
+
+case "${LABWC_PID:-}" in
+  ''|0|1|*[!0-9]*)
+    fatal "LABWC_PID is unavailable for the managed desktop session"
+    ;;
+esac
+
+command -v labwc >/dev/null 2>&1 ||
+  fatal "labwc is unavailable"
+
+# Labwc owns its shutdown hook. The hook performs no manual service, process,
+# mount, or socket teardown; the systemd user manager handles the session
+# lifecycle after the compositor accepts this exit request.
+labwc --exit >/dev/null 2>&1 ||
+  fatal "Labwc rejected the managed session exit request"

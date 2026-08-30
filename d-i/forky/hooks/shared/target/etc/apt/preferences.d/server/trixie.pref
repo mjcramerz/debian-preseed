@@ -1,0 +1,7 @@
+# Managed by the installer apt-setup preferences generator.
+# Keep Debian Trixie as the preferred target archive when addon/server-suite
+# selects the server-side suite override.
+
+Package: *
+Pin: release n=trixie
+Pin-Priority: 900

@@ -1,0 +1,21 @@
+[Unit]
+Description=Run the managed Labwc compositor
+ConditionEnvironment=LABWC_SESSION_OWNER=desktop
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+Requires=dbus.service dbus.socket
+After=dbus.service dbus.socket
+PartOf=labwc-session.target
+Before=labwc-session.target
+
+[Service]
+Type=exec
+Environment=LIBSEAT_BACKEND=seatd
+# Never turn an inherited X11/Xwayland value into the compositor's executable
+# path. In particular, an explicitly empty WLR_XWAYLAND value makes wlroots
+# attempt to execute an empty filename. The installer separately guarantees
+# that the public xwayland package and /usr/bin/Xwayland are absent.
+UnsetEnvironment=DISPLAY XAUTHORITY WLR_XWAYLAND XWAYLAND XWAYLAND_PATH XWAYLAND_NO_GLAMOR XWAYLAND_FORCE_SCALE XWAYLAND_RESTART_DELAY _XWAYLAND_GLOBAL_OUTPUT_SCALE WINDOWID SESSION_MANAGER DESKTOP_STARTUP_ID
+ExecStart=/usr/bin/labwc
+TimeoutStopSec=30s

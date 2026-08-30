@@ -1,0 +1,1748 @@
+#!/bin/bash -p
+# Managed by unattended-installer.
+#
+# The wrapper directory is the only managed Codex directory on the host PATH.
+# This remains the public `codex` command and starts Codex in a Bubblewrap
+# sandbox unless the caller explicitly supplies the wrapper-only --no-bwrap
+# escape hatch. Release siblings are added only to the sanitized payload PATH.
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 077
+
+readonly CODEX_RAW_BINARY="/data/codex/share/bin/codex"
+readonly CODEX_WRAPPER_DIRECTORY="/data/codex/lib"
+readonly CODEX_RELEASE_BINARY_DIRECTORY="/data/codex/share/bin"
+readonly CODEX_STORAGE_ROOT="/data/codex"
+readonly CODEX_POOL_ROOT="/pool"
+readonly CODEX_USER_ROOT="/data/codex/usr"
+readonly CODEX_AGENTS_ROOT="/data/codex/usr/agents"
+readonly CODEX_RUNTIME_HOME="/data/codex/usr/home"
+readonly CODEX_SKILLS_ROOT="/data/codex/usr/skills"
+readonly CODEX_LOG_ROOT="/data/codex/log"
+readonly CODEX_HOST_LOG_ROOT="/var/log/managed/openai/codex"
+readonly CODEX_SQLITE_ROOT="/data/codex/sqlite"
+readonly CODEX_RUNTIME_ROOT="/data/codex/runtime"
+readonly CODEX_SHARED_DOWNLOADS_ROOT="/data/downloads"
+readonly CODEX_DEVOPS_GROUP="devops"
+readonly CODEX_CONTROL_ROOT="${CODEX_RUNTIME_ROOT}/.control"
+readonly CODEX_MEMORY_ROOT="${CODEX_RUNTIME_HOME}/memories"
+readonly CODEX_MEMORY_GIT_GUARD="${CODEX_MEMORY_ROOT}/.git"
+readonly BWRAP_BINARY="/usr/bin/bwrap"
+readonly LSATTR_BINARY="/usr/bin/lsattr"
+readonly SLIRP4NETNS_BINARY="/usr/bin/slirp4netns"
+
+declare -a CODEX_ARGS=()
+declare -a BWRAP_ARGS=()
+declare -a DEVOPS_READ_WRITE_HOME_DIRECTORIES=(
+  Downloads
+  Workspace
+)
+# Keep virtualization policy inspectable from Codex without exposing the
+# libvirt control socket or writable VM/Vagrant storage to the sandbox.
+declare -a DEVOPS_READ_ONLY_HOME_DIRECTORIES=(
+  .cmake/packages
+  .config/Code/User/snippets
+  .config/bat
+  .config/bazel
+  .config/clangd
+  .config/direnv
+  .config/featherpad
+  .config/fzf
+  .config/git
+  .config/micro
+  .config/mise
+  .config/nano
+  .config/nvim
+  .config/pip
+  .config/powershell
+  .config/retroarch
+  .config/satty
+  .config/sleek
+  .config/task
+  .config/vim
+  .config/virt-manager
+  .config/yamllint
+  .local/bin
+  .local/lib
+  .local/share/powershell/Modules
+)
+declare -a DEVOPS_READ_ONLY_HOME_FILES=(
+  .bash_aliases
+  .bash_logout
+  .bash_profile
+  .bashrc
+  .config/Code/User/keybindings.json
+  .config/Code/User/settings.json
+  .config/cargo/config.toml
+  .config/containers/containers.conf
+  .config/containers/mounts.conf
+  .config/containers/policy.json
+  .config/containers/registries.conf
+  .config/containers/seccomp.json
+  .config/containers/storage.conf
+  .config/gh/config.yml
+  .config/go/env
+  .config/libvirt/libvirt.conf
+  .config/libvirt/qemu.conf
+  .config/mimeapps.list
+  .config/obsidian/obsidian.json
+  .config/starship.toml
+  .config/user-dirs.dirs
+  .config/uv/uv.toml
+  .config/xdg-terminals.list
+  .dircolors
+  .gitconfig
+  .gitlint
+  .lldbinit
+  .markdownlint-cli2.cjs
+  .markdownlint-cli2.jsonc
+  .markdownlint-cli2.mjs
+  .markdownlint-cli2.yaml
+  .markdownlint.json
+  .markdownlint.yaml
+  .markdownlint.yml
+  .profile
+  .profile.d/71-devops-de.sh
+  .profile.d/72-virt-vagrant.sh
+  .profile.d/75-firmware-workspace.sh
+  .recoll/recoll.conf
+  .ripgreprc
+  .rustfmt.toml
+  .shellcheckrc
+  .vagrant.d/Vagrantfile
+  .vimrc
+  .zlogin
+  .zlogout
+  .zprofile
+  .zsh_aliases
+  .zshenv
+  .zshrc
+)
+declare -a CODEX_DEVOPS_ENV_NAMES=()
+declare -ar AMBIENT_X11_ENV_NAMES=(
+  DISPLAY
+  XAUTHORITY
+  WLR_XWAYLAND
+  XWAYLAND
+  XWAYLAND_PATH
+  XWAYLAND_NO_GLAMOR
+  XWAYLAND_FORCE_SCALE
+  XWAYLAND_RESTART_DELAY
+  _XWAYLAND_GLOBAL_OUTPUT_SCALE
+  WINDOWID
+  SESSION_MANAGER
+  DESKTOP_STARTUP_ID
+)
+declare -a SANDBOX_UNSET_ENV_NAMES=(
+  BASHOPTS
+  BASH_ENV
+  CONTAINER
+  DBUS_SESSION_BUS_ADDRESS
+  DBUS_SYSTEM_BUS_ADDRESS
+  DESKTOP_STARTUP_ID
+  DESKTOP_SESSION
+  DISPLAY
+  ENV
+  GDMSESSION
+  GNOME_DESKTOP_SESSION_ID
+  HOST
+  HOSTNAME
+  HOSTTYPE
+  INVOCATION_ID
+  JOURNAL_STREAM
+  KDE_FULL_SESSION
+  LANGUAGE
+  LD_AUDIT
+  LD_DEBUG
+  LD_LIBRARY_PATH
+  LD_PRELOAD
+  LIBVIRT_DEFAULT_URI
+  MACHTYPE
+  OLDPWD
+  OSTYPE
+  PYTHONHOME
+  PYTHONINSPECT
+  PYTHONPATH
+  PYTHONSTARTUP
+  PYTHONUSERBASE
+  REMOTEHOST
+  SESSION_MANAGER
+  SHELLOPTS
+  SSH_AGENT_PID
+  SSH_AUTH_SOCK
+  SSH_CLIENT
+  SSH_CONNECTION
+  SSH_TTY
+  SYSTEMD_EXEC_PID
+  VAGRANT_DEFAULT_PROVIDER
+  VAGRANT_HOME
+  VIRSH_DEFAULT_CONNECT_URI
+  WAYLAND_DISPLAY
+  WINDOWID
+  WLR_XWAYLAND
+  XAUTHORITY
+  XWAYLAND
+  XWAYLAND_FORCE_SCALE
+  XWAYLAND_NO_GLAMOR
+  XWAYLAND_PATH
+  XWAYLAND_RESTART_DELAY
+  _XWAYLAND_GLOBAL_OUTPUT_SCALE
+  XDG_CURRENT_DESKTOP
+  XDG_SEAT
+  XDG_SESSION_CLASS
+  XDG_SESSION_DESKTOP
+  XDG_SESSION_ID
+  XDG_SESSION_TYPE
+  XDG_VTNR
+  container
+)
+
+CODEX_USE_BWRAP=1
+CODEX_SANDBOX_PATH=""
+CODEX_CONTROL_DIR=""
+CODEX_BWRAP_PID=""
+CODEX_SANDBOX_PID=""
+CODEX_SLIRP_PID=""
+CODEX_SIGNALLED=0
+
+codex_log() {
+  printf 'codex-wrapper: %s\n' "$*" >&2
+}
+
+codex_warn() {
+  printf 'codex-wrapper: warning: %s\n' "$*" >&2
+}
+
+codex_die() {
+  printf 'codex-wrapper: fatal: %s\n' "$*" >&2
+  exit 1
+}
+
+codex_require_abs_path() {
+  local label=${1:?label is required}
+  local value=${2:-}
+
+  [[ -n "${value}" && "${value}" == /* ]] ||
+    codex_die "${label} must be an absolute path"
+  [[ "${value}" != "/" && "${value}" != *$'\n'* && "${value}" != *$'\r'* ]] ||
+    codex_die "${label} is unsafe: ${value}"
+  case "${value}" in
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/@+-]*)
+      codex_die "${label} contains unsupported characters: ${value}"
+      ;;
+  esac
+  case "${value}" in
+    */../* | */./* | *//*)
+      codex_die "${label} contains unsupported path syntax: ${value}"
+      ;;
+  esac
+}
+
+codex_require_directory() {
+  local label=${1:?label is required}
+  local value=${2:-}
+
+  codex_require_abs_path "${label}" "${value}"
+  [[ -d "${value}" && ! -L "${value}" ]] ||
+    codex_die "${label} is missing or is not a real directory: ${value}"
+}
+
+codex_require_executable() {
+  local label=${1:?label is required}
+  local value=${2:-}
+
+  codex_require_abs_path "${label}" "${value}"
+  [[ -f "${value}" && ! -L "${value}" && -x "${value}" ]] ||
+    codex_die "${label} is missing, indirect, or not executable: ${value}"
+}
+
+codex_require_user_namespace_support() {
+  local clone_policy=1
+  local namespace_limit=""
+
+  if [[ -r /proc/sys/kernel/unprivileged_userns_clone ]]; then
+    IFS= read -r clone_policy </proc/sys/kernel/unprivileged_userns_clone ||
+      codex_die "unable to read the unprivileged user-namespace policy"
+    [[ "${clone_policy}" == "1" ]] ||
+      codex_die "unprivileged user namespaces are disabled; the managed Codex sysctl policy is not active"
+  fi
+
+  [[ -r /proc/sys/user/max_user_namespaces ]] ||
+    codex_die "the kernel does not expose user.max_user_namespaces"
+  IFS= read -r namespace_limit </proc/sys/user/max_user_namespaces ||
+    codex_die "unable to read user.max_user_namespaces"
+  [[ "${namespace_limit}" =~ ^[0-9]+$ && "${namespace_limit}" -gt 0 ]] ||
+    codex_die "user.max_user_namespaces must be greater than zero"
+}
+
+codex_generate_uuid() {
+  local value=""
+
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then
+    IFS= read -r value </proc/sys/kernel/random/uuid || true
+  fi
+  [[ "${value}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] ||
+    codex_die "unable to generate a runtime identifier"
+  printf '%s\n' "${value}"
+}
+
+codex_random_u32() {
+  local uuid
+
+  uuid=$(codex_generate_uuid)
+  printf '%u\n' "$((16#${uuid:0:8}))"
+}
+
+codex_random_bounded() {
+  local maximum=${1:?maximum is required}
+  local limit sample
+
+  [[ "${maximum}" =~ ^[1-9][0-9]*$ ]] ||
+    codex_die "random upper bound must be a positive integer"
+  ((maximum <= 4294967296)) ||
+    codex_die "random upper bound is too large"
+
+  limit=$(((4294967296 / maximum) * maximum))
+  while :; do
+    sample=$(codex_random_u32)
+    if ((sample < limit)); then
+      printf '%u\n' "$((sample % maximum))"
+      return 0
+    fi
+  done
+}
+
+codex_random_kernel_release() {
+  local family major minor patch suffix
+
+  family=$(codex_random_bounded 3)
+  case "${family}" in
+    0)
+      major=6
+      minor=$((7 + $(codex_random_bounded 13)))
+      patch=$(codex_random_bounded 100)
+      ;;
+    1)
+      major=7
+      minor=0
+      patch=$(codex_random_bounded 100)
+      ;;
+    2)
+      major=7
+      minor=1
+      patch=$(codex_random_bounded 6)
+      ;;
+  esac
+  suffix=$(codex_generate_uuid)
+  printf '%s.%s.%s-codex-%s-amd64\n' \
+    "${major}" \
+    "${minor}" \
+    "${patch}" \
+    "${suffix:0:8}"
+}
+
+codex_parse_arguments() {
+  local arg
+
+  CODEX_ARGS=()
+  for arg in "$@"; do
+    if [[ "${arg}" == "--no-bwrap" ]]; then
+      CODEX_USE_BWRAP=0
+      continue
+    fi
+    CODEX_ARGS+=("${arg}")
+  done
+}
+
+codex_sanitize_path() {
+  local raw_path=${PATH:-/usr/local/bin:/usr/bin:/bin}
+  local entry sanitized=""
+  local -a entries=()
+
+  IFS=: read -r -a entries <<<"${raw_path}"
+  for entry in "${entries[@]}"; do
+    [[ -n "${entry}" && "${entry}" == /* ]] || continue
+    [[ "${entry}" != "${CODEX_WRAPPER_DIRECTORY}" ]] || continue
+    [[ "${entry}" != "${CODEX_RELEASE_BINARY_DIRECTORY}" ]] || continue
+    if [[ -e "${entry}" ]]; then
+      if [[ -e "${CODEX_WRAPPER_DIRECTORY}" &&
+            "${entry}" -ef "${CODEX_WRAPPER_DIRECTORY}" ]] ||
+         [[ -e "${CODEX_RELEASE_BINARY_DIRECTORY}" &&
+            "${entry}" -ef "${CODEX_RELEASE_BINARY_DIRECTORY}" ]]; then
+        continue
+      fi
+    fi
+    [[ "${entry}" != *$'\n'* && "${entry}" != *$'\r'* ]] || continue
+    case "${entry}" in
+      *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._/@+-]*)
+        continue
+        ;;
+    esac
+    case ":${sanitized}:" in
+      *":${entry}:"*) continue ;;
+    esac
+    if [[ -n "${sanitized}" ]]; then
+      sanitized="${sanitized}:${entry}"
+    else
+      sanitized="${entry}"
+    fi
+  done
+  [[ -n "${sanitized}" ]] || sanitized="/usr/local/bin:/usr/bin:/bin"
+  CODEX_SANDBOX_PATH="${sanitized}:${CODEX_RELEASE_BINARY_DIRECTORY}"
+  PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+  export PATH
+}
+
+codex_append_devops_environment() {
+  local env_name
+
+  for env_name in "${CODEX_DEVOPS_ENV_NAMES[@]}"; do
+    BWRAP_ARGS+=(--setenv "${env_name}" "${!env_name}")
+  done
+}
+
+codex_collect_devops_environment() {
+  local profile_path=${1:?managed DevOps profile is required}
+  local snapshot_path snapshot_bytes record name value
+  local environment_count=0
+  local -A seen_names=()
+
+  codex_require_private_account_directory \
+    "current user runtime directory" \
+    "${XDG_RUNTIME_DIR:-}"
+  snapshot_path=$(
+    /usr/bin/mktemp \
+      "${XDG_RUNTIME_DIR}/codex-devops-environment.XXXXXXXXXX"
+  ) || codex_die "cannot create the private DevOps environment snapshot"
+
+  if ! /usr/bin/env -i \
+       HOME="${HOME}" \
+       USER="${USER}" \
+       LOGNAME="${LOGNAME:-${USER}}" \
+       XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
+       PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+       /bin/bash --noprofile --norc -p -Eeuo pipefail -c '
+         profile_path=$1
+         # shellcheck source=/dev/null
+         source "${profile_path}" >&2
+         declare -F devops_de_apply_environment >/dev/null || {
+           printf "%s\n" "managed DevOps environment function is unavailable" >&2
+           exit 1
+         }
+         devops_de_apply_environment >&2 || {
+           printf "%s\n" "managed DevOps environment activation failed" >&2
+           exit 1
+         }
+         [[ "${DEVOPS_DE_ACTIVE:-}" == 1 ]] || {
+           printf "%s\n" "managed DevOps environment marker is missing" >&2
+           exit 1
+         }
+         exec /usr/bin/env -0
+       ' codex-devops-environment "${profile_path}" >"${snapshot_path}"
+  then
+    /usr/bin/rm -f -- "${snapshot_path}"
+    codex_die "managed DevOps environment activation failed"
+  fi
+
+  snapshot_bytes=$(/usr/bin/stat -c '%s' -- "${snapshot_path}") || {
+    /usr/bin/rm -f -- "${snapshot_path}"
+    codex_die "cannot inspect the private DevOps environment snapshot"
+  }
+  [[ "${snapshot_bytes}" =~ ^[0-9]+$ && "${snapshot_bytes}" -le 262144 ]] || {
+    /usr/bin/rm -f -- "${snapshot_path}"
+    codex_die "managed DevOps environment exceeds the 256 KiB limit"
+  }
+
+  CODEX_DEVOPS_ENV_NAMES=()
+  while IFS= read -r -d '' record; do
+    ((environment_count += 1))
+    ((environment_count <= 256)) || {
+      /usr/bin/rm -f -- "${snapshot_path}"
+      codex_die "managed DevOps environment exceeds 256 variables"
+    }
+    [[ "${record}" == *=* ]] || {
+      /usr/bin/rm -f -- "${snapshot_path}"
+      codex_die "managed DevOps environment contains a malformed record"
+    }
+    name=${record%%=*}
+    value=${record#*=}
+    [[ "${name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || {
+      /usr/bin/rm -f -- "${snapshot_path}"
+      codex_die "managed DevOps environment contains an unsafe variable name"
+    }
+    [[ -z "${seen_names[${name}]+x}" ]] || {
+      /usr/bin/rm -f -- "${snapshot_path}"
+      codex_die "managed DevOps environment contains a duplicate variable"
+    }
+    seen_names["${name}"]=1
+
+    case "${name}" in
+      HOME | LOGNAME | PWD | SHLVL | USER | XDG_RUNTIME_DIR | _)
+        continue
+        ;;
+      BASHOPTS | BASH_ENV | CDPATH | ENV | GLOBIGNORE | IFS | SHELLOPTS)
+        /usr/bin/rm -f -- "${snapshot_path}"
+        codex_die "managed DevOps environment exports a shell-control variable"
+        ;;
+      PATH)
+        [[ "${PATH:-}" == "${value}" ]] || {
+          /usr/bin/rm -f -- "${snapshot_path}"
+          codex_die "managed DevOps PATH is not deterministic"
+        }
+        continue
+        ;;
+    esac
+
+    [[ "${!name-}" == "${value}" ]] || {
+      /usr/bin/rm -f -- "${snapshot_path}"
+      codex_die "managed DevOps environment is not deterministic"
+    }
+    CODEX_DEVOPS_ENV_NAMES+=("${name}")
+  done <"${snapshot_path}"
+  /usr/bin/rm -f -- "${snapshot_path}" ||
+    codex_die "cannot remove the private DevOps environment snapshot"
+
+  [[ "${DEVOPS_DE_ACTIVE:-}" == 1 && -n "${PATH:-}" ]] ||
+    codex_die "managed DevOps environment is incomplete"
+}
+
+codex_activate_devops_environment() {
+  local actual_user actual_uid profile_mode profile_owner profile_path profile_real
+
+  actual_user=$(id -un) ||
+    codex_die "cannot resolve the invoking account name"
+  actual_uid=$(id -u) ||
+    codex_die "cannot resolve the invoking account identifier"
+  case "${USER:-}" in
+    '' | . | .. | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.@-]*)
+      codex_die "the invoking account name is unsafe"
+      ;;
+  esac
+  [[ "${USER}" == "${actual_user}" ]] ||
+    codex_die "USER does not match the invoking account"
+  [[ "${LOGNAME:-${USER}}" == "${actual_user}" ]] ||
+    codex_die "LOGNAME does not match the invoking account"
+  codex_require_abs_path "HOME" "${HOME:-}"
+  codex_require_account_owned_directory "HOME" "${HOME}"
+
+  profile_path="${HOME}/.profile.d/71-devops-de.sh"
+  codex_require_abs_path "managed DevOps profile" "${profile_path}"
+  [[ -f "${profile_path}" && ! -L "${profile_path}" && -r "${profile_path}" ]] ||
+    codex_die "managed DevOps profile is unavailable or indirect: ${profile_path}"
+  profile_real=$(readlink -f -- "${profile_path}") ||
+    codex_die "cannot resolve the managed DevOps profile"
+  [[ "${profile_real}" == "${profile_path}" ]] ||
+    codex_die "managed DevOps profile must not traverse symlinks"
+  profile_owner=$(stat -c '%u' -- "${profile_path}") ||
+    codex_die "cannot inspect managed DevOps profile ownership"
+  profile_mode=$(stat -c '%a' -- "${profile_path}") ||
+    codex_die "cannot inspect managed DevOps profile mode"
+  [[ "${profile_owner}" == "${actual_uid}" && "${profile_mode}" == "600" ]] ||
+    codex_die "managed DevOps profile must be an invoking-account-owned mode-0600 regular file"
+
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  XDG_CONFIG_HOME="${HOME}/.config"
+  export PATH XDG_CONFIG_HOME
+  unset LIBVIRT_DEFAULT_URI VAGRANT_DEFAULT_PROVIDER VAGRANT_HOME
+
+  # shellcheck source=/dev/null
+  source "${profile_path}"
+  declare -F devops_de_apply_environment >/dev/null ||
+    codex_die "managed DevOps environment function is unavailable"
+  devops_de_apply_environment ||
+    codex_die "managed DevOps environment activation failed"
+  [[ "${DEVOPS_DE_ACTIVE:-}" == 1 ]] ||
+    codex_die "managed DevOps environment marker is missing"
+
+  codex_collect_devops_environment "${profile_path}"
+}
+
+codex_prepare_environment() {
+  codex_activate_devops_environment
+
+  export CODEX_AGENTS="${CODEX_AGENTS_ROOT}"
+  export CODEX_HOME="${CODEX_RUNTIME_HOME}"
+  export CODEX_LOG_DIR="${CODEX_LOG_ROOT}"
+  export CODEX_SKILLS="${CODEX_SKILLS_ROOT}"
+  export CODEX_SQLITE_HOME="${CODEX_SQLITE_ROOT}"
+  export SHELL=/bin/zsh
+
+  codex_sanitize_path
+}
+
+codex_require_account_owned_searchable_directory() {
+  local label=${1:?label is required}
+  local path=${2:?path is required}
+  local expected_owner owner path_real
+
+  codex_require_directory "${label}" "${path}"
+  path_real=$(readlink -f -- "${path}") ||
+    codex_die "cannot resolve ${label}: ${path}"
+  [[ "${path_real}" == "${path}" ]] ||
+    codex_die "${label} must not traverse symlinks: ${path}"
+  expected_owner=$(id -u)
+  owner=$(stat -c '%u' -- "${path}")
+  [[ "${expected_owner}" =~ ^[0-9]+$ && "${owner}" =~ ^[0-9]+$ ]] ||
+    codex_die "${label} owner is malformed"
+  [[ "${owner}" == "${expected_owner}" ]] ||
+    codex_die "${label} must remain owned by the invoking account"
+  [[ -x "${path}" ]] ||
+    codex_die "${label} must remain searchable by the invoking account"
+}
+
+codex_require_account_owned_readable_directory() {
+  local label=${1:?label is required}
+  local path=${2:?path is required}
+  local mode
+
+  codex_require_account_owned_searchable_directory "${label}" "${path}"
+  mode=$(stat -c '%a' -- "${path}")
+  [[ "${mode}" =~ ^[0-7]{3,4}$ ]] ||
+    codex_die "${label} mode is malformed"
+  (( (8#${mode} & 00022) == 0 )) ||
+    codex_die "${label} must not be writable by group or other"
+  [[ -r "${path}" ]] ||
+    codex_die "${label} must remain readable by the invoking account"
+}
+
+codex_require_account_owned_directory() {
+  local label=${1:?label is required}
+  local path=${2:?path is required}
+
+  codex_require_account_owned_readable_directory "${label}" "${path}"
+  [[ -w "${path}" ]] ||
+    codex_die "${label} must remain writable by the invoking account"
+}
+
+codex_require_private_account_directory() {
+  local label=${1:?label is required}
+  local path=${2:?path is required}
+  local mode
+
+  codex_require_account_owned_directory "${label}" "${path}"
+  mode=$(stat -c '%a' -- "${path}")
+  [[ "${mode}" == 700 ]] ||
+    codex_die "${label} must remain mode 0700"
+}
+
+codex_require_devops_shared_account_directory() {
+  local label=${1:?label is required}
+  local path=${2:?path is required}
+  local account_uid
+
+  account_uid=$(id -u) ||
+    codex_die "cannot resolve the invoking account identifier"
+  [[ "${account_uid}" =~ ^[0-9]+$ ]] ||
+    codex_die "the invoking account identifier is malformed"
+  codex_require_managed_directory \
+    "${label}" \
+    "${path}" \
+    "${account_uid}" \
+    "${CODEX_DEVOPS_GROUP}" \
+    2770 \
+    1
+}
+
+codex_require_managed_directory() {
+  local label=${1:?label is required}
+  local path=${2:?path is required}
+  local expected_owner=${3:?expected owner is required}
+  local expected_group=${4:?expected group is required}
+  local expected_mode=${5:?expected mode is required}
+  local require_write=${6:-1}
+  local group_id group_name metadata mode owner path_real
+
+  [[ "${expected_owner}" =~ ^[0-9]+$ ]] ||
+    codex_die "${label} expected owner is malformed"
+  [[ "${expected_group}" =~ ^[A-Za-z0-9_.@-]+$ ]] ||
+    codex_die "${label} expected group is malformed"
+  [[ "${expected_mode}" =~ ^[0-7]{3,4}$ ]] ||
+    codex_die "${label} expected mode is malformed"
+  case "${require_write}" in
+    0 | 1) ;;
+    *) codex_die "${label} write requirement is malformed" ;;
+  esac
+
+  codex_require_directory "${label}" "${path}"
+  path_real=$(readlink -f -- "${path}") ||
+    codex_die "cannot resolve ${label}: ${path}"
+  [[ "${path_real}" == "${path}" ]] ||
+    codex_die "${label} must not traverse symlinks: ${path}"
+
+  metadata=$(stat -c '%u:%g:%G:%a' -- "${path}") ||
+    codex_die "cannot inspect ${label}: ${path}"
+  IFS=: read -r owner group_id group_name mode <<<"${metadata}"
+  [[ "${owner}" =~ ^[0-9]+$ && "${group_id}" =~ ^[0-9]+$ ]] ||
+    codex_die "${label} ownership is malformed"
+  [[ "${mode}" =~ ^[0-7]{3,4}$ ]] ||
+    codex_die "${label} mode is malformed"
+  [[ "${owner}" == "${expected_owner}" &&
+     "${group_name}" == "${expected_group}" &&
+     "${mode}" == "${expected_mode}" ]] ||
+    codex_die "${label} must remain owner ${expected_owner}, group ${expected_group}, and mode ${expected_mode}: ${path}"
+  [[ -r "${path}" && -x "${path}" ]] ||
+    codex_die "${label} must remain readable and searchable: ${path}"
+  if [[ "${require_write}" == 1 && ! -w "${path}" ]]; then
+    codex_die "${label} must remain writable by the invoking account: ${path}"
+  fi
+}
+
+codex_require_managed_work_areas() {
+  local account_uid devops_group_id group_id home_directory pool_label pool_root
+  local -a current_group_ids=()
+
+  account_uid=$(id -u) ||
+    codex_die "cannot resolve the invoking account identifier"
+  [[ "${account_uid}" =~ ^[0-9]+$ ]] ||
+    codex_die "the invoking account identifier is malformed"
+
+  IFS=' ' read -r -a current_group_ids <<<"$(id -G)" ||
+    codex_die "cannot resolve the invoking account group memberships"
+  ((${#current_group_ids[@]} > 0)) ||
+    codex_die "the invoking account has no group memberships"
+  for group_id in "${current_group_ids[@]}"; do
+    [[ "${group_id}" =~ ^[0-9]+$ ]] ||
+      codex_die "the invoking account group memberships are malformed"
+  done
+
+  for home_directory in "${DEVOPS_READ_WRITE_HOME_DIRECTORIES[@]}"; do
+    codex_require_managed_directory \
+      "managed ${home_directory} directory" \
+      "${HOME}/${home_directory}" \
+      "${account_uid}" \
+      "${USER}" \
+      755 \
+      1
+  done
+
+  codex_require_managed_directory \
+    "pool root" \
+    "${CODEX_POOL_ROOT}" \
+    0 \
+    devops \
+    2775 \
+    1
+  devops_group_id=$(stat -c '%g' -- "${CODEX_POOL_ROOT}") ||
+    codex_die "cannot inspect the pool root group"
+  [[ "${devops_group_id}" =~ ^[0-9]+$ ]] ||
+    codex_die "the pool root group is malformed"
+  group_id=
+  for group_id in "${current_group_ids[@]}"; do
+    [[ "${group_id}" == "${devops_group_id}" ]] && break
+  done
+  [[ "${group_id}" == "${devops_group_id}" ]] ||
+    codex_die "the invoking account is not a member of the managed devops group"
+
+  for pool_root in \
+    "${CODEX_POOL_ROOT}/cache" \
+    "${CODEX_POOL_ROOT}/build" \
+    "${CODEX_POOL_ROOT}/db"
+  do
+    pool_label=${pool_root##*/}
+    codex_require_managed_directory \
+      "pool ${pool_label} root" \
+      "${pool_root}" \
+      0 \
+      devops \
+      2770 \
+      1
+
+    codex_require_managed_directory \
+      "pool ${pool_label} account directory" \
+      "${pool_root}/${USER}" \
+      "${account_uid}" \
+      devops \
+      2770 \
+      1
+  done
+
+  codex_require_managed_directory \
+    "managed Codex storage root" \
+    "${CODEX_STORAGE_ROOT}" \
+    0 \
+    devops \
+    3770 \
+    1
+  codex_require_managed_directory \
+    "managed shared downloads root" \
+    "${CODEX_SHARED_DOWNLOADS_ROOT}" \
+    "${account_uid}" \
+    "${USER}" \
+    2750 \
+    1
+}
+
+codex_prepare_memory_guard() {
+  local guard_attributes guard_owner guard_mode
+
+  codex_require_account_owned_directory \
+    "Codex repository root" \
+    "${CODEX_USER_ROOT}"
+  codex_require_devops_shared_account_directory \
+    "Codex home" \
+    "${CODEX_RUNTIME_HOME}"
+  codex_require_devops_shared_account_directory \
+    "Codex memory directory" \
+    "${CODEX_MEMORY_ROOT}"
+
+  [[ -f "${CODEX_MEMORY_GIT_GUARD}" && ! -L "${CODEX_MEMORY_GIT_GUARD}" ]] ||
+    codex_die "the installer-owned memories .git guard is missing or indirect"
+
+  guard_owner=$(stat -c '%u' -- "${CODEX_MEMORY_GIT_GUARD}")
+  guard_mode=$(stat -c '%a' -- "${CODEX_MEMORY_GIT_GUARD}")
+
+  [[ "${guard_owner}" =~ ^[0-9]+$ ]] ||
+    codex_die "the memories .git guard owner is malformed"
+  [[ "${guard_mode}" =~ ^[0-7]{1,4}$ ]] ||
+    codex_die "the memories .git guard mode is malformed"
+  if [[ "${guard_owner}" != "0" ]] || ((8#${guard_mode} != 0444)); then
+    codex_die "the memories .git guard must remain root-owned with mode 0444"
+  fi
+
+  codex_require_executable "lsattr" "${LSATTR_BINARY}"
+  guard_attributes=$("${LSATTR_BINARY}" -d -- "${CODEX_MEMORY_GIT_GUARD}" 2>/dev/null) ||
+    codex_die "unable to read the memories .git guard attributes"
+  guard_attributes=${guard_attributes%% *}
+  [[ "${guard_attributes}" == *i* ]] ||
+    codex_die "the memories .git guard must retain its immutable attribute"
+}
+
+codex_prepare_control_state() {
+  codex_require_devops_shared_account_directory \
+    "Codex runtime root" \
+    "${CODEX_RUNTIME_ROOT}"
+
+  if [[ -e "${CODEX_CONTROL_ROOT}" || -L "${CODEX_CONTROL_ROOT}" ]]; then
+    codex_require_private_account_directory \
+      "Codex runtime control root" \
+      "${CODEX_CONTROL_ROOT}"
+  else
+    install -d -m 0700 -- "${CODEX_CONTROL_ROOT}"
+    chmod a-s -- "${CODEX_CONTROL_ROOT}"
+  fi
+  codex_require_private_account_directory \
+    "Codex runtime control root" \
+    "${CODEX_CONTROL_ROOT}"
+}
+
+codex_render_uname_wrapper() {
+  local target=${1:?target is required}
+  local fake_hostname=${2:?hostname is required}
+  local fake_release=${3:?release is required}
+  local fake_version=${4:?version is required}
+
+  cat >"${target}" <<EOF
+#!/bin/sh
+set -eu
+
+sysname=Linux
+nodename='${fake_hostname}'
+release='${fake_release}'
+version='${fake_version}'
+machine=x86_64
+processor=x86_64
+hardware=x86_64
+operating_system=GNU/Linux
+
+if [ "\$#" -eq 0 ]; then
+  printf '%s\\n' "\$sysname"
+  exit 0
+fi
+
+selected=
+append_field() {
+  if [ -n "\$selected" ]; then
+    selected="\${selected} \$1"
+  else
+    selected=\$1
+  fi
+}
+
+for argument in "\$@"; do
+  case "\$argument" in
+    --help)
+      printf '%s\\n' 'Usage: uname [OPTION]...'
+      exit 0
+      ;;
+    --version)
+      printf '%s\\n' 'uname (synthetic Codex runtime)'
+      exit 0
+      ;;
+    --all) append_field "\$sysname \$nodename \$release \$version \$machine \$processor \$hardware \$operating_system" ;;
+    --kernel-name) append_field "\$sysname" ;;
+    --nodename) append_field "\$nodename" ;;
+    --kernel-release) append_field "\$release" ;;
+    --kernel-version) append_field "\$version" ;;
+    --machine) append_field "\$machine" ;;
+    --processor) append_field "\$processor" ;;
+    --hardware-platform) append_field "\$hardware" ;;
+    --operating-system) append_field "\$operating_system" ;;
+    -*)
+      flags=\${argument#-}
+      while [ -n "\$flags" ]; do
+        flag=\${flags%"\${flags#?}"}
+        flags=\${flags#?}
+        case "\$flag" in
+          a) append_field "\$sysname \$nodename \$release \$version \$machine \$processor \$hardware \$operating_system" ;;
+          s) append_field "\$sysname" ;;
+          n) append_field "\$nodename" ;;
+          r) append_field "\$release" ;;
+          v) append_field "\$version" ;;
+          m) append_field "\$machine" ;;
+          p) append_field "\$processor" ;;
+          i) append_field "\$hardware" ;;
+          o) append_field "\$operating_system" ;;
+          *)
+            printf 'uname: unsupported option in synthetic runtime: -%s\\n' "\$flag" >&2
+            exit 1
+            ;;
+        esac
+      done
+      ;;
+    *)
+      printf 'uname: extra operand: %s\\n' "\$argument" >&2
+      exit 1
+      ;;
+  esac
+done
+
+printf '%s\\n' "\$selected"
+EOF
+  chmod 0755 -- "${target}"
+}
+
+codex_prepare_identity_files() {
+  local uid=${1:?uid is required}
+  local gid=${2:?gid is required}
+  local uuid installation_id machine_id hostid_hex fake_hostname fake_release fake_version
+  local group_id group_ids
+
+  CODEX_CONTROL_DIR=$(mktemp -d "${CODEX_CONTROL_ROOT}/launch.XXXXXXXX") ||
+    codex_die "unable to allocate wrapper control directory"
+  chmod 0700 -- "${CODEX_CONTROL_DIR}"
+
+  uuid=$(codex_generate_uuid)
+  installation_id=$(codex_generate_uuid)
+  machine_id=${uuid//-/}
+  hostid_hex=${machine_id:0:8}
+  fake_hostname="codex-${machine_id:0:12}"
+  fake_release=$(codex_random_kernel_release)
+  fake_version="#1 SMP PREEMPT_DYNAMIC Codex ${machine_id:0:8}"
+
+  printf '%s\n' "${machine_id}" >"${CODEX_CONTROL_DIR}/machine-id"
+  printf '%s\n' "${fake_hostname}" >"${CODEX_CONTROL_DIR}/hostname"
+  printf '%b' \
+    "\\x${hostid_hex:0:2}\\x${hostid_hex:2:2}\\x${hostid_hex:4:2}\\x${hostid_hex:6:2}" \
+    >"${CODEX_CONTROL_DIR}/hostid"
+  {
+    printf '127.0.0.1 localhost\n'
+    printf '127.0.1.1 %s\n' "${fake_hostname}"
+    printf '::1 localhost ip6-localhost ip6-loopback\n'
+  } >"${CODEX_CONTROL_DIR}/hosts"
+  printf 'nameserver 10.0.2.3\noptions timeout:2 attempts:3\n' \
+    >"${CODEX_CONTROL_DIR}/resolv.conf"
+  {
+    printf 'root:x:0:0:root:/root:/usr/sbin/nologin\n'
+    printf 'codex:x:%s:%s:Codex Runtime:%s:/bin/zsh\n' "${uid}" "${gid}" "${HOME}"
+  } >"${CODEX_CONTROL_DIR}/passwd"
+  {
+    printf 'root:x:0:\n'
+    printf 'codex:x:%s:codex\n' "${gid}"
+    group_ids=$(id -G)
+    local IFS=' '
+    for group_id in ${group_ids}; do
+      [[ "${group_id}" == "${gid}" ]] && continue
+      [[ "${group_id}" =~ ^[0-9]+$ ]] || continue
+      printf 'codex-g%s:x:%s:codex\n' "${group_id}" "${group_id}"
+    done
+  } >"${CODEX_CONTROL_DIR}/group"
+  : >"${CODEX_CONTROL_DIR}/empty"
+  printf '%s\n' "${fake_release}" >"${CODEX_CONTROL_DIR}/osrelease"
+  printf '%s\n' "${fake_version}" >"${CODEX_CONTROL_DIR}/kernel-version"
+  printf 'Linux version %s (codex@runtime) %s\n' "${fake_release}" "${fake_version}" \
+    >"${CODEX_CONTROL_DIR}/proc-version"
+  printf '%s\n' "${uuid}" >"${CODEX_CONTROL_DIR}/boot-id"
+  printf '%s' "${installation_id}" >"${CODEX_CONTROL_DIR}/installation_id"
+  chmod 0644 -- "${CODEX_CONTROL_DIR}/installation_id"
+  printf 'codex.local\n' >"${CODEX_CONTROL_DIR}/domainname"
+  printf 'root=/dev/mapper/codex-root ro quiet\n' >"${CODEX_CONTROL_DIR}/cmdline"
+  printf '12345.67 98765.43\n' >"${CODEX_CONTROL_DIR}/uptime"
+  printf '0.00 0.01 0.05 1/64 1\n' >"${CODEX_CONTROL_DIR}/loadavg"
+  {
+    printf 'Character devices:\n'
+    printf '  1 mem\n'
+    printf '  5 /dev/tty\n'
+    printf '  5 /dev/console\n'
+    printf '136 pts\n'
+    printf 'Block devices:\n'
+  } >"${CODEX_CONTROL_DIR}/devices"
+  {
+    printf 'nodev\tsysfs\n'
+    printf 'nodev\ttmpfs\n'
+    printf 'nodev\tproc\n'
+    printf 'nodev\tdevtmpfs\n'
+    printf 'nodev\tdevpts\n'
+    printf '\text4\n'
+    printf '\tbtrfs\n'
+    printf '\tf2fs\n'
+    printf 'nodev\toverlay\n'
+  } >"${CODEX_CONTROL_DIR}/filesystems"
+  printf 'major minor  #blocks  name\n\n' >"${CODEX_CONTROL_DIR}/partitions"
+  printf 'Filename\t\t\tType\t\tSize\t\tUsed\t\tPriority\n' \
+    >"${CODEX_CONTROL_DIR}/swaps"
+  {
+    printf 'MemTotal:        8388608 kB\n'
+    printf 'MemFree:         4194304 kB\n'
+    printf 'MemAvailable:    6291456 kB\n'
+    printf 'Buffers:          131072 kB\n'
+    printf 'Cached:          1048576 kB\n'
+    printf 'SwapCached:            0 kB\n'
+    printf 'SwapTotal:       2097152 kB\n'
+    printf 'SwapFree:        2097152 kB\n'
+  } >"${CODEX_CONTROL_DIR}/meminfo"
+  {
+    printf 'cpu  100 0 50 10000 0 0 0 0 0 0\n'
+    printf 'cpu0 25 0 12 2500 0 0 0 0 0 0\n'
+    printf 'cpu1 25 0 13 2500 0 0 0 0 0 0\n'
+    printf 'cpu2 25 0 12 2500 0 0 0 0 0 0\n'
+    printf 'cpu3 25 0 13 2500 0 0 0 0 0 0\n'
+    printf 'intr 1\nctxt 1\nbtime 1700000000\nprocesses 1\nprocs_running 1\nprocs_blocked 0\n'
+  } >"${CODEX_CONTROL_DIR}/stat"
+  : >"${CODEX_CONTROL_DIR}/cpuinfo"
+  for group_id in 0 1 2 3; do
+    {
+      printf 'processor\t: %s\n' "${group_id}"
+      printf 'vendor_id\t: GenuineIntel\n'
+      printf 'cpu family\t: 6\n'
+      printf 'model\t\t: 143\n'
+      printf 'model name\t: Generic x86_64 Processor\n'
+      printf 'stepping\t: 0\n'
+      printf 'cpu MHz\t\t: 2400.000\n'
+      printf 'cache size\t: 16384 KB\n'
+      printf 'physical id\t: 0\n'
+      printf 'siblings\t: 4\n'
+      printf 'core id\t\t: %s\n' "${group_id}"
+      printf 'cpu cores\t: 4\n'
+      printf 'flags\t\t: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge cmov pat mmx fxsr sse sse2 ss ht syscall nx lm constant_tsc rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch invpcid_single pti avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt xsaveopt\n\n'
+    } >>"${CODEX_CONTROL_DIR}/cpuinfo"
+  done
+
+  codex_render_uname_wrapper \
+    "${CODEX_CONTROL_DIR}/uname" \
+    "${fake_hostname}" \
+    "${fake_release}" \
+    "${fake_version}"
+
+  mkfifo \
+    "${CODEX_CONTROL_DIR}/bwrap-info.fifo" \
+    "${CODEX_CONTROL_DIR}/bwrap-block.fifo" \
+    "${CODEX_CONTROL_DIR}/slirp-ready.fifo"
+}
+
+codex_append_ro_bind_if_present() {
+  local source_path=${1:?source path is required}
+  local destination_path=${2:?destination path is required}
+
+  if [[ -e "${source_path}" || -L "${source_path}" ]]; then
+    BWRAP_ARGS+=(--ro-bind "${source_path}" "${destination_path}")
+  fi
+}
+
+codex_append_home_ro_bind_if_present() {
+  local relative_path=${1:?HOME-relative path is required}
+  local source_path destination_path source_real owner mode expected_owner
+  local parent_path relative_parent current_path component
+  local -a components=()
+
+  [[ "${relative_path}" != /* &&
+     "${relative_path}" != *$'\n'* &&
+     "${relative_path}" != *$'\r'* ]] ||
+    codex_die "HOME-relative bind path is unsafe: ${relative_path}"
+  case "/${relative_path}/" in
+    */./* | */../* | *//*)
+      codex_die "HOME-relative bind path contains unsupported syntax: ${relative_path}"
+      ;;
+  esac
+
+  source_path="${HOME}/${relative_path}"
+  destination_path=${source_path}
+  if [[ ! -e "${source_path}" && ! -L "${source_path}" ]]; then
+    return 0
+  fi
+  [[ ! -L "${source_path}" ]] ||
+    codex_die "HOME-relative bind source must not be a symlink: ${source_path}"
+  [[ -f "${source_path}" || -d "${source_path}" ]] ||
+    codex_die "HOME-relative bind source must be a regular file or directory: ${source_path}"
+
+  source_real=$(readlink -f -- "${source_path}") ||
+    codex_die "cannot resolve HOME-relative bind source: ${source_path}"
+  [[ "${source_real}" == "${source_path}" && "${source_real}" == "${HOME}/"* ]] ||
+    codex_die "HOME-relative bind source escapes HOME or traverses a symlink: ${source_path}"
+  expected_owner=$(id -u)
+  owner=$(stat -c '%u' -- "${source_path}") ||
+    codex_die "cannot inspect HOME-relative bind ownership: ${source_path}"
+  mode=$(stat -c '%a' -- "${source_path}") ||
+    codex_die "cannot inspect HOME-relative bind mode: ${source_path}"
+  [[ "${owner}" == "${expected_owner}" && "${mode}" =~ ^[0-7]{3,4}$ ]] ||
+    codex_die "HOME-relative bind source has unsafe ownership or mode: ${source_path}"
+  (( (8#${mode} & 00022) == 0 )) ||
+    codex_die "HOME-relative bind source must not be writable by group or other: ${source_path}"
+  [[ -r "${source_path}" ]] ||
+    codex_die "HOME-relative bind source is not readable: ${source_path}"
+  if [[ -d "${source_path}" && ! -x "${source_path}" ]]; then
+    codex_die "HOME-relative directory is not searchable: ${source_path}"
+  fi
+
+  parent_path=${destination_path%/*}
+  relative_parent=${parent_path#"${HOME}/"}
+  if [[ "${parent_path}" != "${HOME}" ]]; then
+    IFS=/ read -r -a components <<<"${relative_parent}"
+    current_path=${HOME}
+    for component in "${components[@]}"; do
+      [[ -n "${component}" ]] ||
+        codex_die "HOME-relative bind destination contains an empty component"
+      current_path="${current_path}/${component}"
+      # Bubblewrap creates these as empty destination directories below the
+      # private HOME tmpfs; it never exposes their host contents. Require a
+      # canonical account-owned traversal path, while the source that is
+      # actually bound below it retains the stricter non-writable mode check.
+      codex_require_account_owned_searchable_directory \
+        "HOME-relative bind parent" \
+        "${current_path}"
+      BWRAP_ARGS+=(--dir "${current_path}")
+    done
+  fi
+  BWRAP_ARGS+=(--ro-bind "${source_path}" "${destination_path}")
+}
+
+codex_append_ro_bind_to_existing_path() {
+  local source_path=${1:?source path is required}
+  local destination_path=${2:?destination path is required}
+  local resolved_destination
+
+  if resolved_destination=$(codex_resolve_existing_mount_file "${destination_path}"); then
+    codex_append_tmpfs_parent_dirs "${resolved_destination}"
+    BWRAP_ARGS+=(--ro-bind "${source_path}" "${resolved_destination}")
+  fi
+}
+
+codex_resolve_existing_mount_file() {
+  local destination_path=${1:?destination path is required}
+  local resolved_destination
+
+  codex_require_abs_path "Bubblewrap mount destination" "${destination_path}"
+  if [[ -L "${destination_path}" ]]; then
+    resolved_destination=$(readlink -e -- "${destination_path}") || return 1
+  else
+    resolved_destination=${destination_path}
+  fi
+  codex_require_abs_path "resolved Bubblewrap mount destination" "${resolved_destination}"
+  [[ -f "${resolved_destination}" && ! -L "${resolved_destination}" ]] || return 1
+  printf '%s\n' "${resolved_destination}"
+}
+
+codex_append_tmpfs_parent_dirs() {
+  local destination_path=${1:?destination path is required}
+  local parent_path current_path component
+  local -a components=()
+
+  codex_require_abs_path "Bubblewrap mount destination" "${destination_path}"
+  case "${destination_path}" in
+    /run/*/*) ;;
+    *) return 0 ;;
+  esac
+
+  parent_path=${destination_path%/*}
+  IFS=/ read -r -a components <<<"${parent_path#/run/}"
+  current_path=/run
+  for component in "${components[@]}"; do
+    [[ -n "${component}" ]] ||
+      codex_die "Bubblewrap mount destination contains an empty /run path component"
+    current_path="${current_path}/${component}"
+    BWRAP_ARGS+=(--dir "${current_path}")
+  done
+}
+
+codex_append_required_ro_bind_to_existing_path() {
+  local label=${1:?label is required}
+  local source_path=${2:?source path is required}
+  local destination_path=${3:?destination path is required}
+  local resolved_destination
+
+  codex_require_abs_path "${label} source" "${source_path}"
+  [[ -f "${source_path}" && ! -L "${source_path}" ]] ||
+    codex_die "${label} source is missing or indirect: ${source_path}"
+  resolved_destination=$(codex_resolve_existing_mount_file "${destination_path}") ||
+    codex_die "${label} destination is missing or does not resolve to a regular file: ${destination_path}"
+  codex_append_tmpfs_parent_dirs "${resolved_destination}"
+  BWRAP_ARGS+=(--ro-bind "${source_path}" "${resolved_destination}")
+}
+
+codex_append_tmpfs_if_present() {
+  local destination_path=${1:?destination path is required}
+
+  if [[ -d "${destination_path}" && ! -L "${destination_path}" ]]; then
+    BWRAP_ARGS+=(--tmpfs "${destination_path}")
+  fi
+}
+
+codex_append_device_bind_if_present() {
+  local device_path=${1:?device path is required}
+  local device_owner
+
+  codex_require_abs_path "managed accelerator device" "${device_path}"
+  if [[ ! -e "${device_path}" && ! -L "${device_path}" ]]; then
+    return 0
+  fi
+  [[ ! -L "${device_path}" ]] ||
+    codex_die "managed accelerator device must not be a symlink: ${device_path}"
+  [[ -d "${device_path}" || -c "${device_path}" ]] ||
+    codex_die "managed accelerator path must be a directory or character device: ${device_path}"
+  device_owner=$(stat -c '%u' -- "${device_path}") ||
+    codex_die "cannot inspect managed accelerator ownership: ${device_path}"
+  [[ "${device_owner}" == 0 ]] ||
+    codex_die "managed accelerator path must remain root-owned: ${device_path}"
+  BWRAP_ARGS+=(--dev-bind "${device_path}" "${device_path}")
+}
+
+codex_append_accelerator_device_binds() {
+  local device_path
+  local device_count=0
+  local -a device_paths=(
+    /dev/dri
+    /dev/kfd
+    /dev/accel
+    /dev/nvidia-caps
+    /dev/nvidiactl
+    /dev/nvidia-modeset
+    /dev/nvidia-uvm
+    /dev/nvidia-uvm-tools
+  )
+  local -a nvidia_device_paths=()
+
+  if shopt -q nullglob; then
+    nvidia_device_paths=(/dev/nvidia[0-9]*)
+  else
+    shopt -s nullglob
+    nvidia_device_paths=(/dev/nvidia[0-9]*)
+    shopt -u nullglob
+  fi
+  device_paths+=("${nvidia_device_paths[@]}")
+
+  for device_path in "${device_paths[@]}"; do
+    if [[ -e "${device_path}" || -L "${device_path}" ]]; then
+      ((device_count += 1))
+      ((device_count <= 64)) ||
+        codex_die "managed accelerator device count exceeds 64"
+    fi
+    codex_append_device_bind_if_present "${device_path}"
+  done
+}
+
+codex_append_session_libvirt_socket_if_present() {
+  local uid=${1:?uid is required}
+  local runtime_dir="/run/user/${uid}"
+  local libvirt_dir="${runtime_dir}/libvirt"
+  local libvirt_socket="${libvirt_dir}/libvirt-sock"
+  local socket_owner
+
+  [[ "${uid}" =~ ^[0-9]+$ ]] ||
+    codex_die "managed libvirt socket uid is malformed"
+  if [[ ! -e "${libvirt_socket}" && ! -L "${libvirt_socket}" ]]; then
+    return 0
+  fi
+  codex_require_private_account_directory \
+    "current user runtime directory" \
+    "${runtime_dir}"
+  codex_require_private_account_directory \
+    "current user libvirt runtime directory" \
+    "${libvirt_dir}"
+  [[ -S "${libvirt_socket}" && ! -L "${libvirt_socket}" ]] ||
+    codex_die "current user libvirt socket is unavailable or indirect"
+  socket_owner=$(stat -c '%u' -- "${libvirt_socket}") ||
+    codex_die "cannot inspect current user libvirt socket ownership"
+  [[ "${socket_owner}" == "${uid}" ]] ||
+    codex_die "current user libvirt socket has an unexpected owner"
+
+  BWRAP_ARGS+=(
+    --dir "${libvirt_dir}"
+    --bind "${libvirt_socket}" "${libvirt_socket}"
+  )
+}
+
+codex_append_selective_home_access() {
+  local home_directory home_file
+
+  BWRAP_ARGS+=(--tmpfs "${HOME}")
+  for home_directory in "${DEVOPS_READ_WRITE_HOME_DIRECTORIES[@]}"; do
+    BWRAP_ARGS+=(--perms 0700 --dir "${HOME}/${home_directory}")
+  done
+  BWRAP_ARGS+=(
+    --dir "${HOME}/.config"
+    --dir "${HOME}/.local"
+  )
+  for home_directory in "${DEVOPS_READ_WRITE_HOME_DIRECTORIES[@]}"; do
+    BWRAP_ARGS+=(
+      --bind
+      "${HOME}/${home_directory}"
+      "${HOME}/${home_directory}"
+    )
+  done
+
+  for home_file in "${DEVOPS_READ_ONLY_HOME_FILES[@]}"; do
+    codex_append_home_ro_bind_if_present "${home_file}"
+  done
+  for home_directory in "${DEVOPS_READ_ONLY_HOME_DIRECTORIES[@]}"; do
+    codex_append_home_ro_bind_if_present "${home_directory}"
+  done
+}
+
+codex_select_sandbox_cwd() {
+  local allowed_root host_cwd
+  local -a allowed_roots=(
+    "${HOME}/Downloads"
+    "${HOME}/Workspace"
+    /tmp
+    "${CODEX_POOL_ROOT}"
+    "${CODEX_STORAGE_ROOT}"
+    "${CODEX_SHARED_DOWNLOADS_ROOT}"
+  )
+
+  host_cwd=$(builtin pwd -P) ||
+    codex_die "cannot resolve the physical working directory"
+  [[ "${host_cwd}" == /* &&
+     "${host_cwd}" != *$'\n'* &&
+     "${host_cwd}" != *$'\r'* ]] ||
+    codex_die "the physical working directory is unsafe"
+
+  if [[ "${host_cwd}" == "${CODEX_RUNTIME_ROOT}" ||
+        "${host_cwd}" == "${CODEX_RUNTIME_ROOT}/"* ]]; then
+    codex_die \
+      "cannot preserve a working directory under ${CODEX_RUNTIME_ROOT}: managed runtime control state is masked in the sandbox"
+  fi
+
+  for allowed_root in "${allowed_roots[@]}"; do
+    if [[ "${host_cwd}" == "${allowed_root}" ||
+          "${host_cwd}" == "${allowed_root}/"* ]]; then
+      printf '%s\n' "${host_cwd}"
+      return 0
+    fi
+  done
+  printf '%s\n' "${HOME}/Workspace"
+}
+
+codex_build_bwrap_args() {
+  local uid=${1:?uid is required}
+  local gid=${2:?gid is required}
+  local synthetic_path="/run/codex-synthetic-bin:${CODEX_SANDBOX_PATH}"
+  local env_name hidden_path sandbox_cwd
+
+  sandbox_cwd=$(codex_select_sandbox_cwd)
+
+  BWRAP_ARGS=(
+    "${BWRAP_BINARY}"
+    --die-with-parent
+    --new-session
+    --unshare-user
+    --unshare-pid
+    --unshare-uts
+    --unshare-ipc
+    --unshare-net
+    --unshare-cgroup
+    --uid "${uid}"
+    --gid "${gid}"
+    --hostname "$(cat "${CODEX_CONTROL_DIR}/hostname")"
+    --cap-drop ALL
+    --ro-bind / /
+    --dev /dev
+    --proc /proc
+    --tmpfs /home
+    --ro-bind /data /data
+    --bind "${CODEX_POOL_ROOT}" "${CODEX_POOL_ROOT}"
+    --ro-bind /sys /sys
+    --tmpfs /run
+    --perms 0700 --dir "/run/user/${uid}"
+    --dir /run/codex-synthetic-bin
+    --ro-bind "${CODEX_CONTROL_DIR}/uname" /run/codex-synthetic-bin/uname
+    --ro-bind "${CODEX_CONTROL_DIR}/uname" /usr/bin/uname
+    --tmpfs /var/log
+    --tmpfs /var/tmp
+  )
+
+  for hidden_path in \
+    /var/lib/AccountsService \
+    /var/lib/NetworkManager \
+    /etc/NetworkManager \
+    /etc/netplan \
+    /etc/systemd/network \
+    /etc/ssh \
+    /boot \
+    /efi \
+    /media \
+    /mnt \
+    /root \
+    /srv \
+    /usr/lib/modules \
+    /var/lib/bluetooth \
+    /var/lib/connman \
+    /var/lib/iwd \
+    /var/lib/systemd/rfkill
+  do
+    codex_append_tmpfs_if_present "${hidden_path}"
+  done
+  for hidden_path in \
+    /sys/block \
+    /sys/bus/scsi/devices \
+    /sys/class/block \
+    /sys/class/dmi/id \
+    /sys/class/net \
+    /sys/class/nvme \
+    /sys/devices/virtual/block \
+    /sys/devices/virtual/dmi/id \
+    /sys/devices/virtual/net \
+    /sys/firmware
+  do
+    codex_append_tmpfs_if_present "${hidden_path}"
+  done
+  for hidden_path in \
+    /proc/acpi \
+    /proc/bus \
+    /proc/driver \
+    /proc/scsi
+  do
+    codex_append_tmpfs_if_present "${hidden_path}"
+  done
+
+  codex_append_ro_bind_if_present /etc/ssh/ssh_config /etc/ssh/ssh_config
+  codex_append_ro_bind_if_present /etc/ssh/ssh_config.d /etc/ssh/ssh_config.d
+
+  codex_append_required_ro_bind_to_existing_path \
+    "synthetic machine identity" \
+    "${CODEX_CONTROL_DIR}/machine-id" \
+    /etc/machine-id
+  codex_append_required_ro_bind_to_existing_path \
+    "synthetic hostname" \
+    "${CODEX_CONTROL_DIR}/hostname" \
+    /etc/hostname
+  codex_append_required_ro_bind_to_existing_path \
+    "synthetic hosts file" \
+    "${CODEX_CONTROL_DIR}/hosts" \
+    /etc/hosts
+  codex_append_required_ro_bind_to_existing_path \
+    "isolated resolver configuration" \
+    "${CODEX_CONTROL_DIR}/resolv.conf" \
+    /etc/resolv.conf
+  codex_append_required_ro_bind_to_existing_path \
+    "synthetic account database" \
+    "${CODEX_CONTROL_DIR}/passwd" \
+    /etc/passwd
+  codex_append_required_ro_bind_to_existing_path \
+    "synthetic group database" \
+    "${CODEX_CONTROL_DIR}/group" \
+    /etc/group
+
+  codex_append_ro_bind_to_existing_path "${CODEX_CONTROL_DIR}/hostid" /etc/hostid
+  codex_append_ro_bind_to_existing_path "${CODEX_CONTROL_DIR}/empty" /etc/shadow
+  codex_append_ro_bind_to_existing_path "${CODEX_CONTROL_DIR}/empty" /etc/gshadow
+  codex_append_ro_bind_to_existing_path "${CODEX_CONTROL_DIR}/empty" /etc/subuid
+  codex_append_ro_bind_to_existing_path "${CODEX_CONTROL_DIR}/empty" /etc/subgid
+  codex_append_ro_bind_to_existing_path "${CODEX_CONTROL_DIR}/empty" /etc/fstab
+  codex_append_ro_bind_to_existing_path "${CODEX_CONTROL_DIR}/empty" /etc/crypttab
+  codex_append_ro_bind_to_existing_path "${CODEX_CONTROL_DIR}/empty" /etc/machine-info
+
+  BWRAP_ARGS+=(
+    --ro-bind "${CODEX_CONTROL_DIR}/cmdline" /proc/cmdline
+    --ro-bind "${CODEX_CONTROL_DIR}/cpuinfo" /proc/cpuinfo
+    --ro-bind "${CODEX_CONTROL_DIR}/devices" /proc/devices
+    --ro-bind "${CODEX_CONTROL_DIR}/filesystems" /proc/filesystems
+    --ro-bind "${CODEX_CONTROL_DIR}/meminfo" /proc/meminfo
+    --ro-bind "${CODEX_CONTROL_DIR}/partitions" /proc/partitions
+    --ro-bind "${CODEX_CONTROL_DIR}/uptime" /proc/uptime
+    --ro-bind "${CODEX_CONTROL_DIR}/loadavg" /proc/loadavg
+    --ro-bind "${CODEX_CONTROL_DIR}/stat" /proc/stat
+    --ro-bind "${CODEX_CONTROL_DIR}/swaps" /proc/swaps
+    --ro-bind "${CODEX_CONTROL_DIR}/proc-version" /proc/version
+    --ro-bind "${CODEX_CONTROL_DIR}/osrelease" /proc/sys/kernel/osrelease
+    --ro-bind "${CODEX_CONTROL_DIR}/kernel-version" /proc/sys/kernel/version
+    --ro-bind "${CODEX_CONTROL_DIR}/hostname" /proc/sys/kernel/hostname
+    --ro-bind "${CODEX_CONTROL_DIR}/domainname" /proc/sys/kernel/domainname
+    --ro-bind "${CODEX_CONTROL_DIR}/boot-id" /proc/sys/kernel/random/boot_id
+    --bind /tmp /tmp
+    --bind "${CODEX_STORAGE_ROOT}" "${CODEX_STORAGE_ROOT}"
+    --bind "${CODEX_SHARED_DOWNLOADS_ROOT}" "${CODEX_SHARED_DOWNLOADS_ROOT}"
+    # Repository policy deliberately persists the complete managed Codex home.
+    # The per-launch installation id immediately below shadows any host copy.
+    --bind "${CODEX_RUNTIME_HOME}" "${CODEX_RUNTIME_HOME}"
+    --bind "${CODEX_CONTROL_DIR}/installation_id" "${CODEX_RUNTIME_HOME}/installation_id"
+    --bind "${CODEX_HOST_LOG_ROOT}" "${CODEX_LOG_ROOT}"
+    --bind "${CODEX_SQLITE_ROOT}" "${CODEX_SQLITE_ROOT}"
+    # Synthetic control files have already been rebound into the namespace.
+    # Mask the persistent host control root before starting the Codex payload.
+    --tmpfs "${CODEX_RUNTIME_ROOT}"
+    --ro-bind "${CODEX_MEMORY_GIT_GUARD}" "${CODEX_MEMORY_GIT_GUARD}"
+  )
+
+  codex_append_ro_bind_to_existing_path \
+    "${CODEX_CONTROL_DIR}/machine-id" \
+    /var/lib/dbus/machine-id
+  for hidden_path in \
+    /proc/buddyinfo \
+    /proc/diskstats \
+    /proc/interrupts \
+    /proc/iomem \
+    /proc/ioports \
+    /proc/kallsyms \
+    /proc/modules \
+    /proc/pagetypeinfo \
+    /proc/slabinfo \
+    /proc/softirqs \
+    /proc/vmallocinfo \
+    /proc/zoneinfo
+  do
+    codex_append_ro_bind_to_existing_path \
+      "${CODEX_CONTROL_DIR}/empty" \
+      "${hidden_path}"
+  done
+
+  codex_append_selective_home_access
+  codex_append_accelerator_device_binds
+  codex_append_session_libvirt_socket_if_present "${uid}"
+
+  for env_name in "${SANDBOX_UNSET_ENV_NAMES[@]}"; do
+    BWRAP_ARGS+=(--unsetenv "${env_name}")
+  done
+  codex_append_devops_environment
+
+  BWRAP_ARGS+=(
+    --setenv HOME "${HOME}"
+    --setenv USER codex
+    --setenv LOGNAME codex
+    --setenv SHELL /bin/zsh
+    --setenv HOSTNAME "$(cat "${CODEX_CONTROL_DIR}/hostname")"
+    --setenv LANG C.UTF-8
+    --setenv LC_ALL C.UTF-8
+    --setenv TZ UTC
+    --setenv CODEX_AGENTS "${CODEX_AGENTS_ROOT}"
+    --setenv CODEX_HOME "${CODEX_RUNTIME_HOME}"
+    --setenv CODEX_LOG_DIR "${CODEX_LOG_ROOT}"
+    --setenv CODEX_SKILLS "${CODEX_SKILLS_ROOT}"
+    --setenv CODEX_SQLITE_HOME "${CODEX_SQLITE_ROOT}"
+    --setenv LIBVIRT_DEFAULT_URI qemu:///session
+    --setenv VIRSH_DEFAULT_CONNECT_URI qemu:///session
+    --setenv XDG_RUNTIME_DIR "/run/user/${uid}"
+    --setenv TMPDIR /tmp
+    --setenv PATH "${synthetic_path}"
+    --setenv PWD "${sandbox_cwd}"
+    --chdir "${sandbox_cwd}"
+  )
+}
+
+codex_parse_sandbox_pid() {
+  local info=${1:-}
+
+  if [[ "${info}" =~ \"child-pid\"[[:space:]]*:[[:space:]]*([1-9][0-9]*) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
+codex_cleanup() {
+  local status=$?
+
+  if [[ -n "${CODEX_SANDBOX_PID}" ]] && kill -0 "${CODEX_SANDBOX_PID}" 2>/dev/null; then
+    kill -TERM "${CODEX_SANDBOX_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${CODEX_BWRAP_PID}" ]] && kill -0 "${CODEX_BWRAP_PID}" 2>/dev/null; then
+    kill -TERM "${CODEX_BWRAP_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${CODEX_SLIRP_PID}" ]] && kill -0 "${CODEX_SLIRP_PID}" 2>/dev/null; then
+    kill -TERM "${CODEX_SLIRP_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${CODEX_BWRAP_PID}" ]]; then
+    wait "${CODEX_BWRAP_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${CODEX_SLIRP_PID}" ]]; then
+    wait "${CODEX_SLIRP_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${CODEX_CONTROL_DIR}" && -d "${CODEX_CONTROL_DIR}" ]]; then
+    rm -rf -- "${CODEX_CONTROL_DIR}"
+  fi
+  return "${status}"
+}
+
+codex_handle_signal() {
+  local signal=${1:?signal is required}
+
+  ((CODEX_SIGNALLED == 0)) || return 0
+  CODEX_SIGNALLED=1
+  if [[ -n "${CODEX_SANDBOX_PID}" ]]; then
+    kill "-${signal}" "${CODEX_SANDBOX_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${CODEX_BWRAP_PID}" ]]; then
+    kill "-${signal}" "${CODEX_BWRAP_PID}" 2>/dev/null || true
+  fi
+  case "${signal}" in
+    HUP) exit 129 ;;
+    INT) exit 130 ;;
+    QUIT) exit 131 ;;
+    TERM) exit 143 ;;
+  esac
+}
+
+codex_run_sandboxed() {
+  local uid gid info_line info_json="" ready_byte=""
+  local info_fd block_fd ready_fd
+  local bwrap_status slirp_status
+
+  uid=$(id -u)
+  gid=$(id -g)
+  [[ "${uid}" =~ ^[0-9]+$ && "${gid}" =~ ^[0-9]+$ ]] ||
+    codex_die "unable to determine the invoking account ids"
+
+  codex_prepare_control_state
+  codex_prepare_identity_files "${uid}" "${gid}"
+  codex_build_bwrap_args "${uid}" "${gid}"
+
+  exec {info_fd}<>"${CODEX_CONTROL_DIR}/bwrap-info.fifo"
+  exec {block_fd}<>"${CODEX_CONTROL_DIR}/bwrap-block.fifo"
+  exec {ready_fd}<>"${CODEX_CONTROL_DIR}/slirp-ready.fifo"
+
+  BWRAP_ARGS+=(
+    --info-fd "${info_fd}"
+    --block-fd "${block_fd}"
+    --
+    "${CODEX_RAW_BINARY}"
+    "${CODEX_ARGS[@]}"
+  )
+
+  # Bash redirects stdin from asynchronous commands to /dev/null when job
+  # control is inactive unless the command has an explicit stdin redirection.
+  # Preserve all three caller descriptors so interactive Codex keeps its PTY
+  # while this wrapper performs the Bubblewrap/slirp setup in parallel.
+  "${BWRAP_ARGS[@]}" <&0 >&1 2>&2 &
+  CODEX_BWRAP_PID=$!
+
+  while IFS= read -r -t 15 -u "${info_fd}" info_line; do
+    info_json+="${info_line}"$'\n'
+    [[ "${info_line}" == "}" ]] && break
+  done
+  if ! CODEX_SANDBOX_PID=$(codex_parse_sandbox_pid "${info_json}"); then
+    if ! kill -0 "${CODEX_BWRAP_PID}" 2>/dev/null; then
+      set +e
+      wait "${CODEX_BWRAP_PID}"
+      bwrap_status=$?
+      set -e
+      CODEX_BWRAP_PID=""
+      codex_die "Bubblewrap exited before reporting a sandbox process id (status ${bwrap_status})"
+    fi
+    codex_die "Bubblewrap did not report a sandbox process id"
+  fi
+  if ! kill -0 "${CODEX_BWRAP_PID}" 2>/dev/null ||
+     ! kill -0 "${CODEX_SANDBOX_PID}" 2>/dev/null; then
+    set +e
+    wait "${CODEX_BWRAP_PID}"
+    bwrap_status=$?
+    set -e
+    CODEX_BWRAP_PID=""
+    CODEX_SANDBOX_PID=""
+    codex_die "Bubblewrap exited during sandbox setup (status ${bwrap_status})"
+  fi
+
+  (
+    exec "${SLIRP4NETNS_BINARY}" \
+      --configure \
+      --mtu=65520 \
+      --disable-host-loopback \
+      --ready-fd "${ready_fd}" \
+      "${CODEX_SANDBOX_PID}" \
+      tap0
+  ) >"${CODEX_CONTROL_DIR}/slirp.stdout" \
+    2>"${CODEX_CONTROL_DIR}/slirp.stderr" &
+  CODEX_SLIRP_PID=$!
+
+  if ! IFS= read -r -n 1 -t 15 -u "${ready_fd}" ready_byte || [[ "${ready_byte}" != "1" ]]; then
+    if ! kill -0 "${CODEX_BWRAP_PID}" 2>/dev/null; then
+      set +e
+      wait "${CODEX_BWRAP_PID}"
+      bwrap_status=$?
+      set -e
+      CODEX_BWRAP_PID=""
+      CODEX_SANDBOX_PID=""
+      codex_die "Bubblewrap exited before network setup completed (status ${bwrap_status})"
+    fi
+    if ! kill -0 "${CODEX_SLIRP_PID}" 2>/dev/null; then
+      set +e
+      wait "${CODEX_SLIRP_PID}"
+      slirp_status=$?
+      set -e
+      CODEX_SLIRP_PID=""
+      codex_die "slirp4netns exited before configuring the isolated network namespace (status ${slirp_status})"
+    fi
+    codex_die "slirp4netns timed out while configuring the isolated network namespace"
+  fi
+  printf '1' >&"${block_fd}"
+
+  exec {info_fd}>&-
+  exec {block_fd}>&-
+  exec {ready_fd}>&-
+
+  set +e
+  wait "${CODEX_BWRAP_PID}"
+  bwrap_status=$?
+  set -e
+  CODEX_BWRAP_PID=""
+  CODEX_SANDBOX_PID=""
+
+  if [[ -n "${CODEX_SLIRP_PID}" ]] && kill -0 "${CODEX_SLIRP_PID}" 2>/dev/null; then
+    kill -TERM "${CODEX_SLIRP_PID}" 2>/dev/null || true
+  fi
+  wait "${CODEX_SLIRP_PID}" 2>/dev/null || true
+  CODEX_SLIRP_PID=""
+
+  return "${bwrap_status}"
+}
+
+main() {
+  local env_name
+
+  codex_parse_arguments "$@"
+  codex_prepare_environment
+
+  codex_require_executable "raw Codex binary" "${CODEX_RAW_BINARY}"
+  codex_require_managed_work_areas
+  codex_require_devops_shared_account_directory \
+    "Codex log directory" \
+    "${CODEX_LOG_ROOT}"
+  codex_require_devops_shared_account_directory \
+    "Codex SQLite directory" \
+    "${CODEX_SQLITE_ROOT}"
+  codex_prepare_memory_guard
+
+  if ((CODEX_USE_BWRAP == 0)); then
+    codex_warn "--no-bwrap explicitly disables host-identity and runtime mount isolation"
+    for env_name in "${AMBIENT_X11_ENV_NAMES[@]}"; do
+      unset "${env_name}"
+    done
+    PATH="${CODEX_SANDBOX_PATH}"
+    export PATH
+    exec "${CODEX_RAW_BINARY}" "${CODEX_ARGS[@]}"
+  fi
+
+  codex_require_devops_shared_account_directory \
+    "managed Codex host log directory" \
+    "${CODEX_HOST_LOG_ROOT}"
+  codex_require_executable "Bubblewrap" "${BWRAP_BINARY}"
+  codex_require_executable "slirp4netns" "${SLIRP4NETNS_BINARY}"
+  codex_require_user_namespace_support
+
+  trap codex_cleanup EXIT
+  trap 'codex_handle_signal HUP' HUP
+  trap 'codex_handle_signal INT' INT
+  trap 'codex_handle_signal QUIT' QUIT
+  trap 'codex_handle_signal TERM' TERM
+
+  codex_run_sandboxed
+}
+
+main "$@"
